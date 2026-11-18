@@ -1,0 +1,41 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>上下文看板</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <div class="app">
+      <header class="topbar">
+        <div class="brand">
+          <h1 id="heading">上下文看板</h1>
+          <p id="subtitle" class="muted">会话上下文用量与压缩信息</p>
+        </div>
+        <div class="actions">
+          <input
+            id="search"
+            class="search"
+            type="search"
+            placeholder="搜索对话…"
+            autocomplete="off"
+            spellcheck="false"
+            aria-label="搜索对话"
+          />
+          <select id="sort" class="sort" aria-label="排序方式"></select>
+          <button id="direction" type="button" class="direction" aria-label="排序方向">↓</button>
+          <button id="refresh" type="button">刷新</button>
+          <button id="theme" type="button" aria-live="polite">主题</button>
+        </div>
+      </header>
+
+      <section id="stats" class="stats" aria-live="polite"></section>
+      <nav id="bots" class="bots" aria-label="按机器人筛选"></nav>
+      <main id="list" class="list"></main>
+      <p id="status" class="status" role="status"></p>
+    </div>
+
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>

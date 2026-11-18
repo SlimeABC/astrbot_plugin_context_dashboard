@@ -1,0 +1,82 @@
+{
+  "metadata": {
+    "display_name": "上下文看板",
+    "short_desc": "在 WebUI 查看每个对话的上下文用量与压缩次数",
+    "desc": "在 AstrBot WebUI 中查看每个对话的上下文用量与压缩次数，支持对话内 context 查询、搜索、排序与深浅色主题。"
+  },
+  "config": {
+    "enable_chat_command": {
+      "description": "启用对话内 context 查询",
+      "hint": "唤醒机器人后发送 context（不区分大小写），直接回复当前对话的上下文占用率，不调用 LLM。"
+    },
+    "auto_refresh_enabled": {
+      "description": "启用自动刷新",
+      "hint": "开启后，WebUI 看板会按设定间隔自动刷新数据；关闭后只能点击「刷新」手动更新。"
+    },
+    "auto_refresh_interval": {
+      "description": "自动刷新间隔（分钟）",
+      "hint": "默认 15 分钟，范围 1–120 分钟。仅在启用自动刷新时生效。"
+    }
+  },
+  "views": {
+    "dashboard": {
+      "title": "上下文看板",
+      "description": "查看每个对话的上下文用量与压缩次数。",
+      "heading": "上下文看板",
+      "subtitle": "每个对话的上下文用量与压缩次数",
+      "search_placeholder": "搜索对话、标题、会话或 ID…",
+      "bot_all": "全部",
+      "bot_filter_label": "按机器人筛选",
+      "bot_unknown": "未知机器人",
+      "sort_label": "排序方式",
+      "sort_asc": "升序",
+      "sort_desc": "降序",
+      "sort_direction_label": "排序方向",
+      "sort_updated": "最近更新",
+      "sort_tokens": "上下文用量",
+      "sort_messages": "消息数",
+      "sort_compression": "压缩次数",
+      "refresh": "刷新",
+      "theme_auto": "主题：跟随",
+      "theme_light": "主题：浅色",
+      "theme_dark": "主题：深色",
+      "stat_sessions": "会话",
+      "stat_conversations": "对话",
+      "stat_messages": "消息",
+      "stat_tokens": "估算 tokens",
+      "stat_compression": "压缩记录",
+      "loading": "正在读取对话…",
+      "loading_cached": "已显示缓存，正在后台更新…",
+      "compression_threshold_hint": "约 82% 触发上下文压缩（AstrBot 默认行为）",
+      "error": "读取失败",
+      "bridge_error": "初始化失败",
+      "empty": "暂无对话记录",
+      "empty_hint": "AstrBot 产生对话后，这里会显示各对话的上下文用量。",
+      "no_match": "没有匹配的对话",
+      "no_match_hint": "换个关键词试试。",
+      "truncated": "对话过多，仅展示最近的一部分。",
+      "compression_badge": "压缩 %s 次",
+      "no_compression": "无压缩记录",
+      "untitled_conversation": "未命名对话",
+      "unknown_platform": "未知平台",
+      "est_tokens": "估算 tokens",
+      "window_unknown": "窗口未知",
+      "role_stat_user": "用户 %s 条 · %s 字",
+      "role_stat_assistant": "助手 %s 条 · %s 字",
+      "role_stat_compact": "%s 条 / %s 字",
+      "detail_loading": "正在读取上下文详情…",
+      "detail_empty": "没有可展示的详情",
+      "detail_chars": "字符",
+      "detail_window": "上下文窗口",
+      "detail_usage": "占用率",
+      "detail_remaining": "剩余 tokens",
+      "detail_session": "会话",
+      "detail_model": "模型提供商",
+      "detail_history_size": "历史大小",
+      "detail_created": "创建时间",
+      "detail_updated": "更新时间",
+      "role_user": "用户",
+      "role_assistant": "助手"
+    }
+  }
+}

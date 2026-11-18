@@ -1,0 +1,25 @@
+{
+  "enable_chat_command": {
+    "description": "启用对话内 context 查询",
+    "hint": "唤醒机器人后发送 context（不区分大小写），直接回复当前对话的上下文占用率，不调用 LLM。",
+    "type": "bool",
+    "default": true
+  },
+  "auto_refresh_enabled": {
+    "description": "启用自动刷新",
+    "hint": "开启后，WebUI 看板会按设定间隔自动刷新数据；关闭后只能点击「刷新」手动更新。",
+    "type": "bool",
+    "default": true
+  },
+  "auto_refresh_interval": {
+    "description": "自动刷新间隔（分钟）",
+    "hint": "默认 15 分钟，范围 1–120 分钟。仅在启用自动刷新时生效。",
+    "type": "int",
+    "default": 15,
+    "slider": {
+      "min": 1,
+      "max": 120,
+      "step": 1
+    }
+  }
+}

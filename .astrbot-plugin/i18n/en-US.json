@@ -1,0 +1,82 @@
+{
+  "metadata": {
+    "display_name": "Context Dashboard",
+    "short_desc": "Inspect context usage and compression count per conversation in the WebUI",
+    "desc": "Inspect context usage and compression counts for every conversation in the AstrBot WebUI, with an in-chat context query, search, sorting and light/dark themes."
+  },
+  "config": {
+    "enable_chat_command": {
+      "description": "Enable in-chat context query",
+      "hint": "Wake the bot and send \"context\" (case-insensitive) to get the current conversation's context usage without calling the LLM."
+    },
+    "auto_refresh_enabled": {
+      "description": "Enable auto refresh",
+      "hint": "When enabled, the dashboard refreshes automatically at the configured interval; when disabled, use the Refresh button."
+    },
+    "auto_refresh_interval": {
+      "description": "Auto refresh interval (minutes)",
+      "hint": "Defaults to 15 minutes, range 1-120. Only used when auto refresh is enabled."
+    }
+  },
+  "views": {
+    "dashboard": {
+      "title": "Context Dashboard",
+      "description": "Context usage and compression counts for every conversation.",
+      "heading": "Context Dashboard",
+      "subtitle": "Context usage and compression counts per conversation",
+      "search_placeholder": "Search conversations, titles, sessions or IDs…",
+      "bot_all": "All bots",
+      "bot_filter_label": "Filter by bot",
+      "bot_unknown": "Unknown bot",
+      "sort_label": "Sort by",
+      "sort_asc": "Ascending",
+      "sort_desc": "Descending",
+      "sort_direction_label": "Sort direction",
+      "sort_updated": "Recently updated",
+      "sort_tokens": "Context usage",
+      "sort_messages": "Messages",
+      "sort_compression": "Compressions",
+      "refresh": "Refresh",
+      "theme_auto": "Theme: auto",
+      "theme_light": "Theme: light",
+      "theme_dark": "Theme: dark",
+      "stat_sessions": "Sessions",
+      "stat_conversations": "Conversations",
+      "stat_messages": "Messages",
+      "stat_tokens": "Est. tokens",
+      "stat_compression": "Compressions",
+      "loading": "Loading conversations…",
+      "loading_cached": "Showing cached data, updating in background…",
+      "compression_threshold_hint": "Context compression triggers at about 82% (AstrBot default)",
+      "error": "Failed to load",
+      "bridge_error": "Initialization failed",
+      "empty": "No conversations yet",
+      "empty_hint": "Once AstrBot handles a conversation, its context usage shows up here.",
+      "no_match": "No matching conversations",
+      "no_match_hint": "Try another keyword.",
+      "truncated": "Too many conversations; showing the most recent ones.",
+      "compression_badge": "Compressed %s×",
+      "no_compression": "No compression",
+      "untitled_conversation": "Untitled conversation",
+      "unknown_platform": "Unknown platform",
+      "est_tokens": "Est. tokens",
+      "window_unknown": "Window unknown",
+      "role_stat_user": "User %s msgs · %s chars",
+      "role_stat_assistant": "Assistant %s msgs · %s chars",
+      "role_stat_compact": "%s msgs / %s chars",
+      "detail_loading": "Loading context details…",
+      "detail_empty": "No details available",
+      "detail_chars": "Characters",
+      "detail_window": "Context window",
+      "detail_usage": "Usage",
+      "detail_remaining": "Remaining tokens",
+      "detail_session": "Session",
+      "detail_model": "Provider",
+      "detail_history_size": "History size",
+      "detail_created": "Created",
+      "detail_updated": "Updated",
+      "role_user": "User",
+      "role_assistant": "Assistant"
+    }
+  }
+}
