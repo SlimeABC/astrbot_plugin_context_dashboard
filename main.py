@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover
     AstrBotConfig = dict
 
 PLUGIN_NAME = "astrbot_plugin_context_dashboard"
-PLUGIN_VERSION = "1.0.0"
+PLUGIN_VERSION = "1.0.1"
 
 MAX_CONVERSATIONS = 500  # 单次扫描的最大对话数
 MAX_WINDOW_LOOKUPS = 200  # 最多为多少个对话探测模型上下文窗口
