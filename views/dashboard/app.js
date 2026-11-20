@@ -14,7 +14,6 @@ const els = {
   sort: document.getElementById("sort"),
   direction: document.getElementById("direction"),
   refresh: document.getElementById("refresh"),
-  theme: document.getElementById("theme"),
   stats: document.getElementById("stats"),
   bots: document.getElementById("bots"),
   list: document.getElementById("list"),
@@ -29,23 +28,20 @@ const state = {
   bot: "all", // "all" 或 platform_id
   sort: "tokens", // updated | tokens | messages | compression
   direction: "desc", // asc | desc
-  themeMode: "auto", // auto | light | dark
   loading: false,
   fetching: false,
   expanded: new Set(),
   details: new Map(), // item.key -> conversation payload
-  autoRefresh: { enabled: true, intervalMinutes: 15 },
+  ui: {
+    charts: { usage: true, growth: true },
+    compression_marker: { enabled: true, percent: 82 },
+    theme_color: "#22c55e",
+  },
+  autoRefresh: { enabled: true, intervalMinutes: 60 },
   refreshTimer: null,
 };
 
-const THEME_LABELS = {
-  auto: ["theme_auto", "主题：跟随"],
-  light: ["theme_light", "主题：浅色"],
-  dark: ["theme_dark", "主题：深色"],
-};
-
 const SORT_OPTIONS = ["updated", "tokens", "messages", "compression"];
-const COMPRESSION_THRESHOLD = 0.82;
 
 const SORT_LABELS = {
   updated: ["sort_updated", "最近更新"],
@@ -167,22 +163,44 @@ function setStatus(message, isError = false) {
 // ---------------------------------------------------------------------------
 
 function applyTheme() {
-  let theme = state.themeMode;
-  if (theme === "auto") {
-    let isDark = false;
-    try {
-      isDark = Boolean(bridge?.getContext?.()?.isDark);
-    } catch {
-      isDark = false;
-    }
-    theme = isDark ? "dark" : "light";
+  let isDark = false;
+  try {
+    isDark = Boolean(bridge?.getContext?.()?.isDark);
+  } catch {
+    isDark = false;
   }
-  document.documentElement.dataset.theme = theme;
+  document.documentElement.dataset.theme = isDark ? "dark" : "light";
+  applyThemeColor();
 }
 
-function renderThemeLabel() {
-  const [key, fallback] = THEME_LABELS[state.themeMode] || THEME_LABELS.auto;
-  els.theme.textContent = t(key, fallback);
+function hexToRgba(hex, alpha) {
+  let value = String(hex || "")
+    .replace("#", "")
+    .trim();
+  if (value.length === 3) {
+    value = value
+      .split("")
+      .map((char) => char + char)
+      .join("");
+  }
+  if (!/^[0-9a-fA-F]{6}$/.test(value)) {
+    return "";
+  }
+  const red = parseInt(value.slice(0, 2), 16);
+  const green = parseInt(value.slice(2, 4), 16);
+  const blue = parseInt(value.slice(4, 6), 16);
+  return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+}
+
+function applyThemeColor() {
+  const color = state.ui?.theme_color || "#22c55e";
+  const root = document.documentElement;
+  root.style.setProperty("--accent", color);
+  const isDark = root.dataset.theme === "dark";
+  const soft = hexToRgba(color, isDark ? 0.18 : 0.12);
+  if (soft) {
+    root.style.setProperty("--accent-soft", soft);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -218,7 +236,6 @@ function renderLabels() {
   els.refresh.classList.toggle("is-loading", state.loading);
   renderSortOptions();
   renderBotFilter();
-  renderThemeLabel();
 }
 
 function botLabel(bot) {
@@ -470,24 +487,37 @@ function renderItem(item) {
     const bar = h("div", "bar");
     const fill = h("span");
     fill.style.width = `${(ratio * 100).toFixed(1)}%`;
-    if (ratio >= COMPRESSION_THRESHOLD) {
+    const marker = state.ui?.compression_marker || {
+      enabled: true,
+      percent: 82,
+    };
+    const thresholdPercent = Math.max(
+      1,
+      Math.min(100, Number(marker.percent) || 82),
+    );
+    if (ratio >= thresholdPercent / 100) {
       fill.className = "is-danger";
     } else if (ratio >= 0.5) {
       fill.className = "is-warn";
     }
-    const threshold = h("i", "bar-threshold");
-    threshold.title = t(
-      "compression_threshold_hint",
-      "约 82% 触发上下文压缩（AstrBot 默认行为）",
-    );
     bar.append(fill);
-    bar.append(threshold);
+    if (marker.enabled !== false) {
+      const threshold = h("i", "bar-threshold");
+      threshold.style.left = `${thresholdPercent}%`;
+      threshold.title = tFormat(
+        "compression_threshold_hint",
+        "约 %s% 触发上下文压缩（AstrBot 默认行为）",
+        thresholdPercent,
+      );
+      bar.append(threshold);
+    }
     usage.append(bar);
+    usage.append(h("span", "usage-percent", fmtPercent(ratio)));
     usage.append(
       h(
         "span",
-        "usage-text",
-        `${fmtPercent(ratio)} / ${fmtNumber(item.context_window)}`,
+        "usage-detail",
+        `${fmtNumber(item.tokens)} / ${fmtNumber(item.context_window)}`,
       ),
     );
   } else {
@@ -591,18 +621,33 @@ function expandBody(body) {
 }
 
 function collapseBody(body) {
-  const height = body.getBoundingClientRect().height;
+  const rect = body.getBoundingClientRect();
   if (typeof body.animate !== "function") {
     body.hidden = true;
     return;
   }
+  const computed = getComputedStyle(body);
   body.style.overflow = "hidden";
   const animation = body.animate(
     [
-      { height: `${height}px`, opacity: 1, transform: "none" },
-      { height: "0px", opacity: 0, transform: "translateY(-4px)" },
+      {
+        height: `${rect.height}px`,
+        paddingTop: computed.paddingTop,
+        paddingBottom: computed.paddingBottom,
+        borderTopWidth: computed.borderTopWidth,
+        opacity: 1,
+        transform: "none",
+      },
+      {
+        height: "0px",
+        paddingTop: "0px",
+        paddingBottom: "0px",
+        borderTopWidth: "0px",
+        opacity: 0,
+        transform: "translateY(-4px)",
+      },
     ],
-    { duration: 220, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+    { duration: 240, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
   );
   animation.onfinish = () => {
     body.hidden = true;
@@ -724,6 +769,446 @@ function renderDetail(container, payload) {
   appendCell(t("detail_created", "创建时间"), fmtTime(conversation.created_at));
   appendCell(t("detail_updated", "更新时间"), fmtTime(conversation.updated_at));
   container.append(grid);
+  renderPolicy(container, conversation.policy);
+  renderCharts(container, conversation, payload?.samples, state.ui);
+}
+
+const POLICY_LABELS = {
+  max_context_length: ["policy_max_context_length", "压缩前最多保留轮数"],
+  dequeue_context_length: ["policy_dequeue_context_length", "轮次超限丢弃轮数"],
+  context_window_fallback: ["policy_window_fallback", "窗口兜底值"],
+  context_compression_keep_ratio: ["policy_keep_ratio", "压缩保留比例"],
+  compression_keep_ratio: ["policy_keep_ratio", "压缩保留比例"],
+  context_compression_strategy: ["policy_strategy", "压缩方式"],
+  compression_strategy: ["policy_strategy", "压缩方式"],
+  context_compression_prompt: ["policy_prompt", "压缩提示词"],
+  compression_prompt: ["policy_prompt", "压缩提示词"],
+  context_compression_provider_id: ["policy_provider", "压缩模型"],
+  compression_provider_id: ["policy_provider", "压缩模型"],
+};
+
+function formatPolicyValue(key, value) {
+  const lower = String(key).toLowerCase();
+  if (lower.includes("ratio")) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number >= 0 && number <= 1) {
+      return `${(number * 100).toFixed(0)}%`;
+    }
+  }
+  if (lower.includes("fallback")) {
+    const number = Number(value);
+    if (Number.isFinite(number) && number > 0) {
+      return fmtNumber(number);
+    }
+  }
+  return String(value);
+}
+
+function renderPolicy(container, policy) {
+  if (!policy) {
+    return;
+  }
+  const entries = Array.isArray(policy.entries) ? policy.entries : [];
+  if (!entries.length) {
+    container.append(
+      h("div", "detail-subtitle", t("policy_title", "上下文策略")),
+    );
+    container.append(
+      h(
+        "p",
+        "hint",
+        policy.config_found
+          ? t("policy_empty", "配置中未找到上下文策略字段。")
+          : t(
+              "policy_unavailable",
+              "未读取到 AstrBot 配置（当前版本可能不支持）。",
+            ),
+      ),
+    );
+    return;
+  }
+  container.append(
+    h("div", "detail-subtitle", t("policy_title", "上下文策略")),
+  );
+  const list = h("div", "policy-list");
+  for (const entry of entries) {
+    const row = h("div", "policy-item");
+    const label = POLICY_LABELS[entry.key];
+    row.append(
+      h("span", "policy-label", label ? t(label[0], label[1]) : entry.key),
+    );
+    row.append(
+      h(
+        "span",
+        "policy-value",
+        formatPolicyValue(entry.key, entry.value),
+      ),
+    );
+    row.title = entry.path || entry.key;
+    list.append(row);
+  }
+  container.append(list);
+}
+
+function renderCharts(container, conversation, samples, ui) {
+  const charts = ui?.charts || {};
+  const showUsage = charts.usage !== false;
+  const showGrowth = charts.growth !== false;
+  if (!showUsage && !showGrowth) {
+    return;
+  }
+
+  const points = (Array.isArray(samples) ? samples : [])
+    .filter(
+      (point) =>
+        Array.isArray(point) &&
+        point.length >= 2 &&
+        Number.isFinite(Number(point[0])) &&
+        Number.isFinite(Number(point[1])),
+    )
+    .map(([ts, tokens, windowValue]) => ({
+      ts: Number(ts) * 1000,
+      tokens: Number(tokens),
+      window: Number(windowValue) || 0,
+    }))
+    .sort((a, b) => a.ts - b.ts);
+
+  if (!points.length) {
+    container.append(
+      h(
+        "p",
+        "hint",
+        t(
+          "chart_not_enough",
+          "暂无采样数据。插件运行并刷新后，这里会显示已采集的曲线。",
+        ),
+      ),
+    );
+    return;
+  }
+
+  const marker = ui?.compression_marker;
+  if (showUsage) {
+    container.append(
+      h("div", "detail-subtitle", t("chart_usage", "上下文用量曲线")),
+    );
+    container.append(
+      buildChart(points, {
+        mode: "usage",
+        markerPercent:
+          marker && marker.enabled !== false ? Number(marker.percent) : null,
+        window: Number(conversation?.context_window) || 0,
+      }),
+    );
+  }
+  if (showGrowth) {
+    container.append(
+      h("div", "detail-subtitle", t("chart_growth", "上下文增量曲线")),
+    );
+    container.append(buildChart(points, { mode: "growth" }));
+  }
+}
+
+function buildChart(points, options = {}) {
+  const mode = options.mode || "usage";
+  const width = 600;
+  const height = 150;
+  const pad = 10;
+  const ns = "http://www.w3.org/2000/svg";
+
+  const series = points.map((point, index) => {
+    if (mode === "growth") {
+      const previous = points[Math.max(0, index - 1)];
+      return {
+        ts: point.ts,
+        value: point.tokens - previous.tokens,
+        window: point.window,
+      };
+    }
+    return { ts: point.ts, value: point.tokens, window: point.window };
+  });
+
+  const values = series.map((entry) => entry.value);
+  const minValue = Math.min(0, ...values);
+  const maxValue = Math.max(1, ...values);
+  const valueSpan = maxValue - minValue || 1;
+  const minTs = series[0].ts;
+  const maxTs = series[series.length - 1].ts;
+  const timeSpan = maxTs - minTs || 1;
+  const capacity = series.reduce(
+    (value, entry) => (entry.window > 0 ? entry.window : value),
+    0,
+  );
+
+  const x = (ts) =>
+    series.length === 1
+      ? width / 2
+      : pad + ((ts - minTs) / timeSpan) * (width - pad * 2);
+  const y = (value) =>
+    height - pad - ((value - minValue) / valueSpan) * (height - pad * 2);
+
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
+  svg.setAttribute("preserveAspectRatio", "none");
+  svg.setAttribute("class", "chart");
+  svg.setAttribute(
+    "aria-label",
+    mode === "growth"
+      ? t("chart_growth", "上下文增量曲线")
+      : t("chart_usage", "上下文用量曲线"),
+  );
+
+  const line = (x1, y1, x2, y2, className) => {
+    const node = document.createElementNS(ns, "line");
+    node.setAttribute("x1", x1);
+    node.setAttribute("y1", y1);
+    node.setAttribute("x2", x2);
+    node.setAttribute("y2", y2);
+    if (className) {
+      node.setAttribute("class", className);
+    }
+    svg.append(node);
+  };
+
+  line(pad, height - pad, width - pad, height - pad, "chart-axis");
+
+  const lineData = series
+    .map(
+      (entry, index) =>
+        `${index === 0 ? "M" : "L"}${x(entry.ts).toFixed(1)},${y(
+          entry.value,
+        ).toFixed(1)}`,
+    )
+    .join(" ");
+
+  if (mode === "usage" && series.length > 1) {
+    const area = document.createElementNS(ns, "path");
+    area.setAttribute(
+      "d",
+      `${lineData} L${x(series[series.length - 1].ts).toFixed(1)},${(
+        height - pad
+      ).toFixed(1)} L${x(series[0].ts).toFixed(1)},${(height - pad).toFixed(
+        1,
+      )} Z`,
+    );
+    area.setAttribute("class", "chart-area");
+    svg.append(area);
+  }
+
+  if (mode === "growth") {
+    const zeroY = y(0);
+    line(pad, zeroY, width - pad, zeroY, "chart-zero");
+  } else if (capacity > 0 && capacity <= maxValue * 1.2) {
+    const capacityY = y(capacity);
+    line(pad, capacityY, width - pad, capacityY, "chart-capacity");
+  }
+
+  if (mode === "usage" && options.markerPercent && options.window > 0) {
+    const threshold = (options.window * Number(options.markerPercent)) / 100;
+    if (threshold <= maxValue) {
+      const thresholdY = y(threshold);
+      line(pad, thresholdY, width - pad, thresholdY, "chart-threshold");
+    }
+  }
+
+  if (mode === "growth") {
+    const positive = [];
+    const negative = [];
+    for (let index = 0; index < series.length - 1; index += 1) {
+      const current = series[index];
+      const next = series[index + 1];
+      const segment = `M${x(current.ts).toFixed(1)},${y(
+        current.value,
+      ).toFixed(1)} L${x(next.ts).toFixed(1)},${y(next.value).toFixed(1)}`;
+      if (current.value + next.value < 0) {
+        negative.push(segment);
+      } else {
+        positive.push(segment);
+      }
+    }
+    if (positive.length) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", positive.join(" "));
+      path.setAttribute("class", "chart-line");
+      svg.append(path);
+    }
+    if (negative.length) {
+      const path = document.createElementNS(ns, "path");
+      path.setAttribute("d", negative.join(" "));
+      path.setAttribute("class", "chart-line-negative");
+      svg.append(path);
+    }
+  } else {
+    const path = document.createElementNS(ns, "path");
+    path.setAttribute("d", lineData);
+    path.setAttribute("class", "chart-line");
+    svg.append(path);
+  }
+
+  const last = series[series.length - 1];
+  const meta = h("div", "chart-meta");
+  meta.append(
+    h("span", null, `${fmtTime(minTs / 1000)} → ${fmtTime(maxTs / 1000)}`),
+  );
+  if (mode === "growth") {
+    meta.append(
+      h(
+        "span",
+        null,
+        tFormat(
+          "chart_last_growth",
+          "最近增量 %s tokens",
+          signedNumber(last.value),
+        ),
+      ),
+    );
+  } else if (capacity > 0) {
+    meta.append(
+      h(
+        "span",
+        null,
+        tFormat(
+          "chart_last_value_capacity",
+          "最近 %s / %s tokens",
+          fmtNumber(last.value),
+          fmtNumber(capacity),
+        ),
+      ),
+    );
+  } else {
+    meta.append(
+      h(
+        "span",
+        null,
+        tFormat("chart_last_value", "最近 %s tokens", fmtNumber(last.value)),
+      ),
+    );
+  }
+
+  if (mode === "growth" && series.length > 1) {
+    const legend = h("span", "chart-legend");
+    legend.append(
+      h("span", "chart-legend-item", t("chart_growth_positive", "增长")),
+    );
+    legend.append(
+      h(
+        "span",
+        "chart-legend-item is-negative",
+        t("chart_growth_negative", "下降"),
+      ),
+    );
+    meta.append(legend);
+  }
+
+  const tooltip = h("div", "chart-tooltip");
+  tooltip.hidden = true;
+
+  const overlay = document.createElementNS(ns, "rect");
+  overlay.setAttribute("x", 0);
+  overlay.setAttribute("y", 0);
+  overlay.setAttribute("width", width);
+  overlay.setAttribute("height", height);
+  overlay.setAttribute("class", "chart-hover-area");
+  svg.append(overlay);
+
+  const hoverLine = document.createElementNS(ns, "line");
+  hoverLine.setAttribute("class", "chart-hover-line");
+  hoverLine.style.display = "none";
+  svg.append(hoverLine);
+
+  const hideTooltip = () => {
+    tooltip.hidden = true;
+    hoverLine.style.display = "none";
+  };
+
+  overlay.addEventListener("pointermove", (event) => {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) {
+      return;
+    }
+    const ratio = Math.max(
+      0,
+      Math.min(1, (event.clientX - rect.left) / rect.width),
+    );
+    const viewX = ratio * width;
+    let nearest = series[0];
+    for (const entry of series) {
+      if (
+        Math.abs(x(entry.ts) - viewX) <
+        Math.abs(x(nearest.ts) - viewX)
+      ) {
+        nearest = entry;
+      }
+    }
+
+    const position = x(nearest.ts) / width;
+    tooltip.style.left = `${(position * 100).toFixed(2)}%`;
+    tooltip.classList.toggle("is-left", position < 0.15);
+    tooltip.classList.toggle("is-right", position > 0.85);
+
+    const parts = [
+      h("span", "chart-tooltip-time", fmtTime(nearest.ts / 1000)),
+    ];
+    if (mode === "growth") {
+      parts.push(
+        h(
+          "span",
+          null,
+          tFormat(
+            "chart_tooltip_growth",
+            "增量 %s tokens",
+            signedNumber(nearest.value),
+          ),
+        ),
+      );
+    } else if (nearest.window > 0) {
+      parts.push(
+        h(
+          "span",
+          null,
+          tFormat(
+            "chart_tooltip_usage_capacity",
+            "已用 %s / %s tokens",
+            fmtNumber(nearest.value),
+            fmtNumber(nearest.window),
+          ),
+        ),
+      );
+    } else {
+      parts.push(
+        h(
+          "span",
+          null,
+          tFormat(
+            "chart_tooltip_usage",
+            "已用 %s tokens",
+            fmtNumber(nearest.value),
+          ),
+        ),
+      );
+    }
+    tooltip.replaceChildren(...parts);
+    tooltip.hidden = false;
+
+    hoverLine.setAttribute("x1", x(nearest.ts));
+    hoverLine.setAttribute("x2", x(nearest.ts));
+    hoverLine.setAttribute("y1", pad);
+    hoverLine.setAttribute("y2", height - pad);
+    hoverLine.style.display = "";
+  });
+  overlay.addEventListener("pointerleave", hideTooltip);
+  overlay.addEventListener("pointercancel", hideTooltip);
+
+  const wrapper = h("div", "chart-wrap");
+  wrapper.append(svg);
+  wrapper.append(meta);
+  wrapper.append(tooltip);
+  return wrapper;
+}
+
+function signedNumber(value) {
+  const number = Number(value) || 0;
+  return `${number >= 0 ? "+" : ""}${fmtNumber(number)}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -805,10 +1290,12 @@ async function load(options = {}) {
     state.items = Array.isArray(payload?.items) ? payload.items : [];
     state.bots = Array.isArray(payload?.bots) ? payload.bots : [];
     state.totals = payload?.totals || null;
+    state.ui = payload?.ui || state.ui;
+    applyThemeColor();
     if (!silent) {
       state.expanded.clear();
-      state.details.clear();
     }
+    state.details.clear();
     if (
       state.bot !== "all" &&
       !state.bots.some((bot) => bot.platform_id === state.bot)
@@ -852,7 +1339,7 @@ async function load(options = {}) {
 
 function setupAutoRefresh(config) {
   const enabled = config?.enabled !== false;
-  const intervalMinutes = Math.max(1, Number(config?.interval_minutes) || 15);
+  const intervalMinutes = Math.max(1, Number(config?.interval_minutes) || 60);
   state.autoRefresh = { enabled, intervalMinutes };
 
   if (state.refreshTimer) {
@@ -906,17 +1393,6 @@ function bindEvents() {
     if (!state.loading) {
       load({ force: true });
     }
-  });
-
-  els.theme.addEventListener("click", () => {
-    state.themeMode =
-      state.themeMode === "auto"
-        ? "light"
-        : state.themeMode === "light"
-          ? "dark"
-          : "auto";
-    applyTheme();
-    renderThemeLabel();
   });
 }
 

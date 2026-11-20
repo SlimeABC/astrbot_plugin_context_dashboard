@@ -6,8 +6,8 @@
   --border: #e4e4e7;
   --text: #1b1b1f;
   --muted: #77777f;
-  --accent: #2f6feb;
-  --accent-soft: rgba(47, 111, 235, 0.12);
+  --accent: #22c55e;
+  --accent-soft: rgba(34, 197, 94, 0.12);
   --warn: #b4690e;
   --warn-soft: rgba(180, 105, 14, 0.12);
   --danger: #c53030;
@@ -21,8 +21,8 @@
   --border: #2e2e33;
   --text: #ececef;
   --muted: #9a9aa2;
-  --accent: #6ba1ff;
-  --accent-soft: rgba(107, 161, 255, 0.16);
+  --accent: #4ade80;
+  --accent-soft: rgba(74, 222, 128, 0.18);
   --warn: #f0b25a;
   --warn-soft: rgba(240, 178, 90, 0.14);
   --danger: #f87171;
@@ -443,6 +443,22 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+.usage-percent {
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1;
+  color: var(--text);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
+.usage-detail {
+  font-size: 11px;
+  color: var(--muted);
+  white-space: nowrap;
+  font-variant-numeric: tabular-nums;
+}
+
 .session-metric {
   display: flex;
   flex-direction: column;
@@ -516,6 +532,182 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* 上下文策略 ----------------------------------------------------------- */
+
+.policy-list {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-top: 6px;
+  padding: 8px 10px;
+  background: var(--panel-soft);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.policy-item {
+  display: grid;
+  grid-template-columns: minmax(120px, 1fr) minmax(0, 2fr);
+  gap: 10px;
+  font-size: 12px;
+}
+
+.policy-label {
+  color: var(--muted);
+}
+
+.policy-value {
+  overflow-wrap: anywhere;
+  font-variant-numeric: tabular-nums;
+}
+
+/* 曲线图 ------------------------------------------------------------- */
+
+.chart-wrap {
+  position: relative;
+  margin-top: 6px;
+}
+
+.chart {
+  display: block;
+  width: 100%;
+  height: 150px;
+  overflow: visible;
+}
+
+.chart-line {
+  fill: none;
+  stroke: var(--accent);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-line-negative {
+  fill: none;
+  stroke: var(--danger);
+  stroke-width: 2;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart-area {
+  fill: var(--accent);
+  opacity: 0.12;
+}
+
+[data-theme="dark"] .chart-area {
+  opacity: 0.2;
+}
+
+.chart-axis {
+  stroke: var(--border);
+  stroke-width: 1;
+}
+
+.chart-zero {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+}
+
+.chart-threshold {
+  stroke: var(--warn);
+  stroke-width: 1;
+  stroke-dasharray: 4 4;
+}
+
+.chart-capacity {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 6 4;
+}
+
+.chart-line,
+.chart-line-negative,
+.chart-axis,
+.chart-zero,
+.chart-threshold,
+.chart-capacity {
+  vector-effect: non-scaling-stroke;
+}
+
+.chart-legend {
+  display: inline-flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.chart-legend-item {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.chart-legend-item::before {
+  content: "";
+  width: 10px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 1px;
+}
+
+.chart-legend-item.is-negative::before {
+  background: var(--danger);
+}
+
+.chart-meta {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  margin-top: 4px;
+  font-size: 11px;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+
+.chart-tooltip {
+  position: absolute;
+  top: 2px;
+  z-index: 2;
+  padding: 4px 8px;
+  font-size: 11px;
+  color: var(--text);
+  white-space: nowrap;
+  background: var(--panel);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.chart-tooltip.is-left {
+  transform: translateX(0);
+}
+
+.chart-tooltip.is-right {
+  transform: translateX(-100%);
+}
+
+.chart-tooltip-time {
+  margin-right: 8px;
+  color: var(--muted);
+}
+
+.chart-hover-area {
+  fill: transparent;
+  pointer-events: all;
+}
+
+.chart-hover-line {
+  stroke: var(--muted);
+  stroke-width: 1;
+  stroke-dasharray: 3 4;
+  pointer-events: none;
+  vector-effect: non-scaling-stroke;
+}
+
 /* 状态与空态 --------------------------------------------------------- */
 
 .status {
@@ -584,6 +776,10 @@ body {
   .bar {
     flex: 1 1 auto;
     min-width: 120px;
+  }
+
+  .usage-percent {
+    font-size: 18px;
   }
 }
 

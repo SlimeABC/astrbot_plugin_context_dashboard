@@ -5,17 +5,66 @@
     "desc": "在 AstrBot WebUI 中查看每个对话的上下文用量与压缩次数，支持对话内 context 查询、搜索、排序与深浅色主题。"
   },
   "config": {
-    "enable_chat_command": {
-      "description": "启用对话内 context 查询",
-      "hint": "唤醒机器人后发送 context（不区分大小写），直接回复当前对话的上下文占用率，不调用 LLM。"
+    "chat_command": {
+      "description": "对话内查询",
+      "hint": "唤醒机器人后发送 context，直接回复当前对话的上下文占用率。",
+      "enable_chat_command": {
+        "description": "启用 context 查询",
+        "hint": "不区分大小写，可带 / 前缀；回复不调用模型。"
+      }
     },
-    "auto_refresh_enabled": {
-      "description": "启用自动刷新",
-      "hint": "开启后，WebUI 看板会按设定间隔自动刷新数据；关闭后只能点击「刷新」手动更新。"
+    "refresh": {
+      "description": "自动刷新",
+      "hint": "控制 WebUI 数据刷新频率；启用每小时统计时至少每小时刷新一次。",
+      "auto_refresh_enabled": {
+        "description": "启用自动刷新",
+        "hint": "启用每小时统计时会被强制开启。"
+      },
+      "auto_refresh_interval": {
+        "description": "刷新间隔（分钟）",
+        "hint": "默认 60 分钟，范围 1–120；启用每小时统计时最多 60 分钟。"
+      }
     },
-    "auto_refresh_interval": {
-      "description": "自动刷新间隔（分钟）",
-      "hint": "默认 15 分钟，范围 1–120 分钟。仅在启用自动刷新时生效。"
+    "history": {
+      "description": "上下文统计",
+      "hint": "每小时后台采样上下文用量，用于对话详情的曲线。",
+      "enable_history_sampling": {
+        "description": "启用每小时统计",
+        "hint": "开启后插件会在每个整点后自动采样，不依赖看板是否打开。"
+      },
+      "history_retention_days": {
+        "description": "数据保留天数（0 = 永久）",
+        "hint": "默认 30 天；填 0 表示永久保留，正数最多 365 天。"
+      }
+    },
+    "charts": {
+      "description": "详情曲线",
+      "hint": "选择在对话详情中显示哪些曲线。",
+      "show_usage_chart": {
+        "description": "显示上下文用量曲线"
+      },
+      "show_growth_chart": {
+        "description": "显示上下文增量曲线"
+      }
+    },
+    "compression_marker": {
+      "description": "压缩阈值标记",
+      "hint": "在进度条上标出压缩触发线。",
+      "show_compression_marker": {
+        "description": "显示标记"
+      },
+      "compression_marker_percent": {
+        "description": "阈值（%）",
+        "hint": "默认 82，对应 AstrBot 文档中的约 82% 触发条件。"
+      }
+    },
+    "appearance": {
+      "description": "外观",
+      "hint": "自定义看板的主色。",
+      "theme_color": {
+        "description": "主题色",
+        "hint": "HTML 颜色代码，例如 #22c55e；默认绿色。"
+      }
     }
   },
   "views": {
@@ -37,9 +86,6 @@
       "sort_messages": "消息数",
       "sort_compression": "压缩次数",
       "refresh": "刷新",
-      "theme_auto": "主题：跟随",
-      "theme_light": "主题：浅色",
-      "theme_dark": "主题：深色",
       "stat_sessions": "会话",
       "stat_conversations": "对话",
       "stat_messages": "消息",
@@ -47,7 +93,13 @@
       "stat_compression": "压缩记录",
       "loading": "正在读取对话…",
       "loading_cached": "已显示缓存，正在后台更新…",
-      "compression_threshold_hint": "约 82% 触发上下文压缩（AstrBot 默认行为）",
+      "compression_threshold_hint": "约 %s% 触发上下文压缩（AstrBot 默认行为）",
+      "chart_usage": "上下文用量曲线",
+      "chart_growth": "上下文增量曲线",
+      "chart_not_enough": "暂无采样数据。插件运行并刷新后，这里会显示已采集的曲线。",
+      "chart_last_value": "最近 %s tokens",
+      "chart_last_value_capacity": "最近 %s / %s tokens",
+      "chart_last_growth": "最近增量 %s tokens",
       "error": "读取失败",
       "bridge_error": "初始化失败",
       "empty": "暂无对话记录",
@@ -76,7 +128,22 @@
       "detail_created": "创建时间",
       "detail_updated": "更新时间",
       "role_user": "用户",
-      "role_assistant": "助手"
+      "role_assistant": "助手",
+      "chart_growth_positive": "增长",
+      "chart_growth_negative": "下降",
+      "chart_tooltip_usage": "已用 %s tokens",
+      "chart_tooltip_usage_capacity": "已用 %s / %s tokens",
+      "chart_tooltip_growth": "增量 %s tokens",
+      "policy_title": "上下文策略",
+      "policy_max_context_length": "压缩前最多保留轮数",
+      "policy_dequeue_context_length": "轮次超限丢弃轮数",
+      "policy_window_fallback": "窗口兜底值",
+      "policy_keep_ratio": "压缩保留比例",
+      "policy_strategy": "压缩方式",
+      "policy_prompt": "压缩提示词",
+      "policy_provider": "压缩模型",
+      "policy_empty": "配置中未找到上下文策略字段。",
+      "policy_unavailable": "未读取到 AstrBot 配置（当前版本可能不支持）。"
     }
   }
 }

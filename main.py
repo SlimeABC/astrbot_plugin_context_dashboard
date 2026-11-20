@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover
     AstrBotConfig = dict
 
 PLUGIN_NAME = "astrbot_plugin_context_dashboard"
-PLUGIN_VERSION = "1.0.1"
+PLUGIN_VERSION = "1.1.0"
 
 MAX_CONVERSATIONS = 500  # 单次扫描的最大对话数
 MAX_WINDOW_LOOKUPS = 200  # 最多为多少个对话探测模型上下文窗口
@@ -35,6 +35,11 @@ MAX_NAME_LOOKUPS = 40  # 单次请求最多查询多少个会话的昵称
 NAME_LOOKUP_TIMEOUT = 1.5  # 单个昵称查询的超时时间（秒）
 SESSIONS_CACHE_TTL = 900  # 列表结果内存缓存秒数（手动刷新会绕过）
 SNAPSHOT_KEY = "sessions_snapshot"  # 持久化快照的 KV key
+SAMPLES_KEY = "context_samples"  # 上下文用量采样数据的 KV key
+MAX_SAMPLE_SERIES = 100  # 最多保留多少个对话的采样
+DEFAULT_SAMPLE_DAYS = 30  # 采样默认保留天数
+DEFAULT_THEME_COLOR = "#22c55e"  # 默认主题色（绿色）
+_COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 
 # 对话内查询：唤醒后发送 context（不区分大小写，可带 / 前缀）
 _CONTEXT_QUERY_RE = re.compile(r"^\s*/?\s*context\s*$", re.IGNORECASE)
@@ -391,6 +396,42 @@ def sanitize_preferences(value: Any) -> dict:
     return prefs
 
 
+def flatten_config(value: Any) -> dict:
+    """把分组配置展平成键值表，兼容旧版扁平配置。"""
+    result: dict = {}
+    if not isinstance(value, dict):
+        return result
+    for key, item in value.items():
+        if isinstance(item, dict):
+            result.update(flatten_config(item))
+        else:
+            result[str(key)] = item
+    return result
+
+
+def sanitize_color(value: Any, default: str = DEFAULT_THEME_COLOR) -> str:
+    """校验 HTML 颜色代码，支持 #RGB 和 #RRGGBB。"""
+    if isinstance(value, str):
+        color = value.strip()
+        if _COLOR_RE.match(color):
+            if len(color) == 4:
+                color = "#" + "".join(ch * 2 for ch in color[1:])
+            return color.lower()
+    return default
+
+
+def walk_config(value: Any, prefix: str = ""):
+    """遍历配置字典，产出 (路径, 键, 值)。"""
+    if not isinstance(value, dict):
+        return
+    for key, item in value.items():
+        path = f"{prefix}.{key}" if prefix else str(key)
+        if isinstance(item, dict):
+            yield from walk_config(item, path)
+        else:
+            yield path, str(key), item
+
+
 def split_umo(value: str) -> tuple[str, str]:
     """从 unified_msg_origin 中拆出 (消息类型, 会话 ID)。"""
     parts = (value or "").split(":")
@@ -415,6 +456,7 @@ class ContextDashboard(Star):
     def __init__(self, context: Context, config: AstrBotConfig | None = None):
         super().__init__(context)
         self.config = config or {}
+        self._settings = flatten_config(self.config)
         self._window_cache: dict[str, int | None] = {}
         self._name_cache: dict[str, str] = {}
         self._name_cache_loaded = False
@@ -422,6 +464,12 @@ class ContextDashboard(Star):
         self._sessions_cache: dict[str, tuple[float, dict]] = {}
         self._snapshot_loaded = False
         self._snapshot: dict | None = None
+        self._samples_loaded = False
+        self._samples: dict[str, list] = {}
+        self._samples_lock: asyncio.Lock | None = None
+        self._sample_task: asyncio.Task | None = None
+        self._config_cache: dict[str, dict] = {}
+        self._config_warning_logged = False
 
         context.register_web_api(
             f"/{PLUGIN_NAME}/sessions",
@@ -442,6 +490,40 @@ class ContextDashboard(Star):
             "WebUI 偏好设置",
         )
         logger.info(f"{PLUGIN_NAME} v{PLUGIN_VERSION} 已加载")
+        self._start_sampler()
+
+    # -- 定时采样 ---------------------------------------------------------
+
+    def _start_sampler(self) -> None:
+        """按小时在后台采样，保证曲线数据不依赖 WebUI 是否打开。"""
+        if not self._config_enabled("enable_history_sampling", True):
+            return
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        if self._sample_task is None:
+            self._sample_task = loop.create_task(self._sample_loop())
+
+    async def _sample_loop(self) -> None:
+        while True:
+            now = time.time()
+            # 对齐到下一个整点后 5 秒
+            await asyncio.sleep(3600 - (now % 3600) + 5)
+            try:
+                await self._sample_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"[{PLUGIN_NAME}] 定时采样失败: {exc!r}")
+
+    async def _sample_once(self) -> None:
+        if not self._config_enabled("enable_history_sampling", True):
+            return
+        conversations = await self._load_conversations()
+        items = self._build_conversations(conversations)
+        await self._attach_context_windows(items)
+        await self._record_samples(items)
 
     # -- 对话内查询 -------------------------------------------------------
 
@@ -512,9 +594,12 @@ class ContextDashboard(Star):
         return format_context_reply(summary["tokens"], window, summary["messages"])
 
     def _config_enabled(self, key: str, default: bool = True) -> bool:
-        """读取布尔配置项，兼容字符串/数字写法。"""
+        """读取布尔配置项，兼容分组/扁平配置。"""
         try:
-            value = self.config.get(key, default) if self.config else default
+            if key in self._settings:
+                value = self._settings[key]
+            else:
+                value = self.config.get(key, default) if self.config else default
         except Exception:  # noqa: BLE001
             return default
         if isinstance(value, bool):
@@ -526,9 +611,12 @@ class ContextDashboard(Star):
     def _config_int(
         self, key: str, default: int, minimum: int = 1, maximum: int = 1440
     ) -> int:
-        """读取整数配置项并限制范围。"""
+        """读取整数配置项并限制范围，兼容分组/扁平配置。"""
         try:
-            value = self.config.get(key, default) if self.config else default
+            if key in self._settings:
+                value = self._settings[key]
+            else:
+                value = self.config.get(key, default) if self.config else default
         except Exception:  # noqa: BLE001
             return default
         try:
@@ -536,6 +624,42 @@ class ContextDashboard(Star):
         except (TypeError, ValueError):
             return default
         return max(minimum, min(number, maximum))
+
+    def _ui_config(self) -> dict:
+        """返回 WebUI 的图表与压缩标记配置。"""
+        return {
+            "charts": {
+                "usage": self._config_enabled("show_usage_chart", True),
+                "growth": self._config_enabled("show_growth_chart", True),
+            },
+            "compression_marker": {
+                "enabled": self._config_enabled(
+                    "show_compression_marker", True
+                ),
+                "percent": self._config_int(
+                    "compression_marker_percent", 82, 1, 100
+                ),
+            },
+            "theme_color": sanitize_color(
+                self._settings.get("theme_color", DEFAULT_THEME_COLOR)
+            ),
+        }
+
+    def _sample_retention(self) -> int:
+        """采样保留时长（秒）；0 表示永久保留。"""
+        days = self._config_int(
+            "history_retention_days", DEFAULT_SAMPLE_DAYS, 0, 365
+        )
+        return days * 86400
+
+    def _refresh_config(self) -> dict:
+        """自动刷新策略：启用每小时统计时至少每小时刷新一次。"""
+        sampling = self._config_enabled("enable_history_sampling", True)
+        enabled = self._config_enabled("auto_refresh_enabled", True) or sampling
+        interval = self._config_int("auto_refresh_interval", 60, 1, 120)
+        if sampling:
+            interval = min(interval, 60)
+        return {"enabled": enabled, "interval_minutes": interval}
 
     @staticmethod
     def _is_woken(event: AstrMessageEvent) -> bool:
@@ -583,6 +707,8 @@ class ContextDashboard(Star):
             conversations = await self._load_conversations()
             items = self._build_conversations(conversations)
             await self._attach_context_windows(items)
+            if self._config_enabled("enable_history_sampling", True):
+                await self._record_samples(items)
             await self._attach_display_names(items)
             bots = self._build_bot_list(items)
 
@@ -612,14 +738,8 @@ class ContextDashboard(Star):
             payload = {
                 "plugin": {"name": PLUGIN_NAME, "version": PLUGIN_VERSION},
                 "generated_at": int(time.time()),
-                "refresh": {
-                    "enabled": self._config_enabled(
-                        "auto_refresh_enabled", True
-                    ),
-                    "interval_minutes": self._config_int(
-                        "auto_refresh_interval", 15, 1, 1440
-                    ),
-                },
+                "refresh": self._refresh_config(),
+                "ui": self._ui_config(),
                 "totals": totals,
                 "bots": bots,
                 "items": items[:limit],
@@ -670,6 +790,7 @@ class ContextDashboard(Star):
             }
         )
         await self._flush_name_cache()
+        policy = await self._context_policy(umo)
 
         payload = {
             "key": f"{platform_id}:{conversation_cid}",
@@ -681,6 +802,7 @@ class ContextDashboard(Star):
             "cid": conversation_cid,
             "title": title or session_id or conversation_cid,
             "display_name": display_name,
+            "policy": policy,
             "created_at": int(
                 coerce_timestamp(getattr(conversation, "created_at", 0))
             ),
@@ -712,7 +834,14 @@ class ContextDashboard(Star):
             ),
         }
 
-        return json_response({"conversation": payload})
+        return json_response(
+            {
+                "conversation": payload,
+                "samples": await self._get_samples(
+                    payload["platform_id"], payload["cid"]
+                ),
+            }
+        )
 
     async def api_preferences(self):
         """读取/保存当前 Dashboard 用户的 WebUI 偏好。"""
@@ -920,6 +1049,8 @@ class ContextDashboard(Star):
                 continue
 
             summary, _ = summarize_history(getattr(conversation, "history", ""))
+            if summary["messages"] == 0:
+                continue
             message_type, session_id = split_umo(user_id)
             title = str(getattr(conversation, "title", "") or "").strip()
 
@@ -1051,12 +1182,109 @@ class ContextDashboard(Star):
             return None
         return str(provider_id) if provider_id else None
 
+    async def _get_config(self, umo: str) -> dict:
+        """读取会话对应的 AstrBot 配置文件（只读）。"""
+        if not umo:
+            return {}
+        if umo in self._config_cache:
+            return self._config_cache[umo]
+
+        getter = getattr(self.context, "get_config", None)
+        value = None
+        if callable(getter):
+            try:
+                value = getter(umo=umo)
+            except TypeError:
+                try:
+                    value = getter()
+                except Exception:  # noqa: BLE001
+                    value = None
+            except Exception:  # noqa: BLE001
+                value = None
+        elif not self._config_warning_logged:
+            self._config_warning_logged = True
+            logger.warning(
+                f"[{PLUGIN_NAME}] 当前 AstrBot 未提供 context.get_config，"
+                "无法读取上下文策略"
+            )
+        value = await maybe_await(value)
+        if not isinstance(value, dict):
+            value = {}
+        self._config_cache[umo] = value
+        return value
+
+    async def _configured_fallback_window(self, umo: str) -> int | None:
+        """读取配置文件中的上下文窗口兜底值。"""
+        config = await self._get_config(umo)
+        for _path, key, value in walk_config(config):
+            lower = key.lower()
+            if "fallback" in lower and ("context" in lower or "window" in lower):
+                if (
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and int(value) > 0
+                ):
+                    return int(value)
+        return None
+
+    async def _context_policy(self, umo: str) -> dict:
+        """汇总配置中的上下文管理策略，供详情展示。"""
+        config = await self._get_config(umo)
+        fallback = None
+        entries: list[dict] = []
+        seen: set[tuple[str, str]] = set()
+
+        for path, key, value in walk_config(config):
+            if isinstance(value, bool) or value is None:
+                continue
+            if not isinstance(value, (str, int, float)):
+                continue
+            lower = key.lower()
+            if isinstance(value, str):
+                text = value.strip()
+                if not text:
+                    continue
+                if len(text) > 160:
+                    text = text[:160] + "…"
+            else:
+                text = value
+
+            if "fallback" in lower and ("context" in lower or "window" in lower):
+                if (
+                    not isinstance(value, bool)
+                    and isinstance(value, (int, float))
+                    and int(value) > 0
+                ):
+                    fallback = int(value)
+            elif not (
+                lower in ("max_context_length", "dequeue_context_length")
+                or any(
+                    token in lower
+                    for token in ("compress", "summary", "context", "window")
+                )
+            ):
+                continue
+
+            marker = (key, str(text))
+            if marker in seen:
+                continue
+            seen.add(marker)
+            entries.append({"key": key, "path": path, "value": text})
+
+        return {
+            "config_found": bool(config),
+            "window_fallback": fallback,
+            "entries": entries[:16],
+        }
+
     async def _lookup_context_window(self, umo: str) -> int | None:
         if umo in self._window_cache:
             return self._window_cache[umo]
 
         provider_id = await self._lookup_provider_id(umo)
         window = self._provider_window(provider_id) if provider_id else None
+        if not window:
+            window = await self._configured_fallback_window(umo)
         self._window_cache[umo] = window
         return window
 
@@ -1279,6 +1507,131 @@ class ContextDashboard(Star):
         except Exception as exc:  # noqa: BLE001
             logger.error(f"[{PLUGIN_NAME}] 保存会话快照失败: {exc!r}")
 
+    # -- 用量采样 ---------------------------------------------------------
+
+    def _get_samples_lock(self) -> asyncio.Lock:
+        if self._samples_lock is None:
+            self._samples_lock = asyncio.Lock()
+        return self._samples_lock
+
+    async def _record_samples(self, items: list[dict]) -> None:
+        if not items:
+            return
+        async with self._get_samples_lock():
+            await self._record_samples_locked(items)
+
+    async def _record_samples_locked(self, items: list[dict]) -> None:
+        """把每个对话当前的已用/总上下文记录到小时级采样中。"""
+        samples = await self._load_samples()
+        now = int(time.time())
+        bucket = now - (now % 3600)
+        retention = self._sample_retention()
+        cutoff = now - retention if retention > 0 else None
+        max_points = (
+            max(24, int(retention / 3600) + 1) if retention > 0 else None
+        )
+
+        for item in items:
+            cid = str(item.get("cid") or "")
+            if not cid:
+                continue
+            key = f"{item.get('platform_id', '')}:{cid}"
+            series = samples.get(key)
+            if not isinstance(series, list):
+                series = []
+            point = [
+                bucket,
+                int(item.get("tokens") or 0),
+                int(item.get("context_window") or 0),
+            ]
+            if series and series[-1][0] == bucket:
+                series[-1] = point
+            else:
+                series.append(point)
+            entries = [
+                entry
+                for entry in series
+                if isinstance(entry, list)
+                and len(entry) >= 2
+                and (cutoff is None or entry[0] >= cutoff)
+            ]
+            if max_points:
+                entries = entries[-max_points:]
+            samples[key] = entries
+
+        if len(samples) > MAX_SAMPLE_SERIES:
+            ordered = sorted(
+                samples.items(),
+                key=lambda kv: kv[1][-1][0] if kv[1] else 0,
+                reverse=True,
+            )
+            samples = dict(ordered[:MAX_SAMPLE_SERIES])
+
+        await self._save_samples(samples)
+
+    async def _load_samples(self) -> dict[str, list]:
+        """首次使用时从插件 KV 加载采样数据。"""
+        if self._samples_loaded:
+            return self._samples
+        self._samples_loaded = True
+        getter = getattr(self, "get_kv_data", None)
+        if callable(getter):
+            try:
+                value = await maybe_await(getter(SAMPLES_KEY, {}))
+            except Exception as exc:  # noqa: BLE001
+                logger.error(f"[{PLUGIN_NAME}] 读取用量采样失败: {exc!r}")
+                return self._samples
+            if isinstance(value, dict):
+                for key, series in value.items():
+                    if not isinstance(key, str) or not isinstance(series, list):
+                        continue
+                    cleaned = []
+                    for entry in series:
+                        if (
+                            not isinstance(entry, (list, tuple))
+                            or len(entry) < 2
+                            or not isinstance(entry[0], (int, float))
+                            or not isinstance(entry[1], (int, float))
+                        ):
+                            continue
+                        window = entry[2] if len(entry) > 2 else 0
+                        if not isinstance(window, (int, float)):
+                            window = 0
+                        cleaned.append(
+                            [int(entry[0]), int(entry[1]), int(window)]
+                        )
+                    if cleaned:
+                        self._samples[key] = cleaned
+        return self._samples
+
+    async def _save_samples(self, samples: dict[str, list]) -> None:
+        """把采样数据写回插件 KV。"""
+        self._samples = samples
+        self._samples_loaded = True
+        setter = getattr(self, "put_kv_data", None)
+        if not callable(setter):
+            return
+        try:
+            await maybe_await(setter(SAMPLES_KEY, samples))
+        except Exception as exc:  # noqa: BLE001
+            logger.error(f"[{PLUGIN_NAME}] 保存用量采样失败: {exc!r}")
+
+    async def _get_samples(
+        self, platform_id: str, cid: str
+    ) -> list[list[int]]:
+        if not cid:
+            return []
+        samples = await self._load_samples()
+        series = samples.get(f"{platform_id}:{cid}", [])
+        retention = self._sample_retention()
+        if retention > 0:
+            cutoff = int(time.time()) - retention
+            series = [entry for entry in series if entry[0] >= cutoff]
+        return [
+            [int(entry[0]), int(entry[1]), int(entry[2])]
+            for entry in series
+        ]
+
     def _platform_client(self, platform_id: str) -> Any | None:
         """尽力获取平台适配器的客户端（用于调用协议端 API）。"""
         if not platform_id:
@@ -1326,7 +1679,11 @@ class ContextDashboard(Star):
 
     async def terminate(self):
         """插件被卸载/停用时清理缓存。"""
+        if self._sample_task is not None:
+            self._sample_task.cancel()
+            self._sample_task = None
         self._window_cache.clear()
         self._name_cache.clear()
         self._sessions_cache.clear()
         self._snapshot = None
+        self._config_cache.clear()

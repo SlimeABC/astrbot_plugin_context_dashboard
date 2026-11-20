@@ -5,17 +5,66 @@
     "desc": "Inspect context usage and compression counts for every conversation in the AstrBot WebUI, with an in-chat context query, search, sorting and light/dark themes."
   },
   "config": {
-    "enable_chat_command": {
-      "description": "Enable in-chat context query",
-      "hint": "Wake the bot and send \"context\" (case-insensitive) to get the current conversation's context usage without calling the LLM."
+    "chat_command": {
+      "description": "In-chat query",
+      "hint": "Wake the bot and send \"context\" to get the current conversation's context usage.",
+      "enable_chat_command": {
+        "description": "Enable context query",
+        "hint": "Case-insensitive, / prefix optional; the reply does not call the LLM."
+      }
     },
-    "auto_refresh_enabled": {
-      "description": "Enable auto refresh",
-      "hint": "When enabled, the dashboard refreshes automatically at the configured interval; when disabled, use the Refresh button."
+    "refresh": {
+      "description": "Auto refresh",
+      "hint": "Controls how often the WebUI refreshes; at least hourly while hourly sampling is enabled.",
+      "auto_refresh_enabled": {
+        "description": "Enable auto refresh",
+        "hint": "Forced on when hourly sampling is enabled."
+      },
+      "auto_refresh_interval": {
+        "description": "Refresh interval (minutes)",
+        "hint": "Defaults to 60, range 1-120; capped at 60 when hourly sampling is enabled."
+      }
     },
-    "auto_refresh_interval": {
-      "description": "Auto refresh interval (minutes)",
-      "hint": "Defaults to 15 minutes, range 1-120. Only used when auto refresh is enabled."
+    "history": {
+      "description": "Context history",
+      "hint": "Samples context usage in the background every hour for the conversation charts.",
+      "enable_history_sampling": {
+        "description": "Enable hourly sampling",
+        "hint": "Samples automatically after each hour, even when the dashboard is closed."
+      },
+      "history_retention_days": {
+        "description": "Retention (days, 0 = forever)",
+        "hint": "Defaults to 30 days; 0 keeps data forever, positive values up to 365 days."
+      }
+    },
+    "charts": {
+      "description": "Detail charts",
+      "hint": "Choose which charts to show in conversation details.",
+      "show_usage_chart": {
+        "description": "Show context usage chart"
+      },
+      "show_growth_chart": {
+        "description": "Show context growth chart"
+      }
+    },
+    "compression_marker": {
+      "description": "Compression marker",
+      "hint": "Mark the compression trigger line on the progress bar.",
+      "show_compression_marker": {
+        "description": "Show marker"
+      },
+      "compression_marker_percent": {
+        "description": "Threshold (%)",
+        "hint": "Defaults to 82, matching AstrBot's documented ~82% trigger."
+      }
+    },
+    "appearance": {
+      "description": "Appearance",
+      "hint": "Customize the dashboard accent color.",
+      "theme_color": {
+        "description": "Theme color",
+        "hint": "HTML color code, e.g. #22c55e; green by default."
+      }
     }
   },
   "views": {
@@ -37,9 +86,6 @@
       "sort_messages": "Messages",
       "sort_compression": "Compressions",
       "refresh": "Refresh",
-      "theme_auto": "Theme: auto",
-      "theme_light": "Theme: light",
-      "theme_dark": "Theme: dark",
       "stat_sessions": "Sessions",
       "stat_conversations": "Conversations",
       "stat_messages": "Messages",
@@ -47,7 +93,13 @@
       "stat_compression": "Compressions",
       "loading": "Loading conversations…",
       "loading_cached": "Showing cached data, updating in background…",
-      "compression_threshold_hint": "Context compression triggers at about 82% (AstrBot default)",
+      "compression_threshold_hint": "Context compression triggers at about %s% (AstrBot default)",
+      "chart_usage": "Context usage",
+      "chart_growth": "Context growth",
+      "chart_not_enough": "No samples yet. Curves will appear after the plugin has collected some data.",
+      "chart_last_value": "Latest %s tokens",
+      "chart_last_value_capacity": "Latest %s / %s tokens",
+      "chart_last_growth": "Latest change %s tokens",
       "error": "Failed to load",
       "bridge_error": "Initialization failed",
       "empty": "No conversations yet",
@@ -76,7 +128,22 @@
       "detail_created": "Created",
       "detail_updated": "Updated",
       "role_user": "User",
-      "role_assistant": "Assistant"
+      "role_assistant": "Assistant",
+      "chart_growth_positive": "Growth",
+      "chart_growth_negative": "Decline",
+      "chart_tooltip_usage": "Used %s tokens",
+      "chart_tooltip_usage_capacity": "Used %s / %s tokens",
+      "chart_tooltip_growth": "Change %s tokens",
+      "policy_title": "Context policy",
+      "policy_max_context_length": "Rounds kept before compression",
+      "policy_dequeue_context_length": "Rounds dropped when over limit",
+      "policy_window_fallback": "Window fallback",
+      "policy_keep_ratio": "Compression keep ratio",
+      "policy_strategy": "Compression strategy",
+      "policy_prompt": "Compression prompt",
+      "policy_provider": "Compression provider",
+      "policy_empty": "No context policy fields found in the config.",
+      "policy_unavailable": "Could not read the AstrBot config (this version may not support it)."
     }
   }
 }
