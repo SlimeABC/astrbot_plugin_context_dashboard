@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover
     AstrBotConfig = dict
 
 PLUGIN_NAME = "astrbot_plugin_context_dashboard"
-PLUGIN_VERSION = "1.1.0"
+PLUGIN_VERSION = "1.1.1"
 
 MAX_CONVERSATIONS = 500  # 单次扫描的最大对话数
 MAX_WINDOW_LOOKUPS = 200  # 最多为多少个对话探测模型上下文窗口
@@ -45,9 +45,14 @@ _COLOR_RE = re.compile(r"^#(?:[0-9a-fA-F]{3}|[0-9a-fA-F]{6})$")
 _CONTEXT_QUERY_RE = re.compile(r"^\s*/?\s*context\s*$", re.IGNORECASE)
 
 # WebUI 偏好（按 Dashboard 用户保存在插件 KV 中）
-PREFERENCE_DEFAULTS = {"sort": "tokens", "direction": "desc"}
+PREFERENCE_DEFAULTS = {
+    "sort": "tokens",
+    "direction": "desc",
+    "chart_range": "24h",
+}
 _SORT_VALUES = {"updated", "tokens", "messages", "compression"}
 _DIRECTION_VALUES = {"asc", "desc"}
+_CHART_RANGE_VALUES = {"6h", "24h", "7d", "30d", "all"}
 
 # 中日韩等表意文字：token 密度远高于拉丁字母
 _CJK_RE = re.compile(
@@ -389,10 +394,13 @@ def sanitize_preferences(value: Any) -> dict:
     if isinstance(value, dict):
         sort = value.get("sort")
         direction = value.get("direction")
+        chart_range = value.get("chart_range")
         if sort in _SORT_VALUES:
             prefs["sort"] = sort
         if direction in _DIRECTION_VALUES:
             prefs["direction"] = direction
+        if chart_range in _CHART_RANGE_VALUES:
+            prefs["chart_range"] = chart_range
     return prefs
 
 

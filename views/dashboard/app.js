@@ -28,6 +28,11 @@ const state = {
   bot: "all", // "all" 或 platform_id
   sort: "tokens", // updated | tokens | messages | compression
   direction: "desc", // asc | desc
+  chartRange: "24h", // 6h | 24h | 7d | 30d | all | custom
+  lastPresetRange: "24h", // 最近一次预设，自定义区间时用于持久化
+  customRange: null, // { start, end } 自定义绝对区间（毫秒）
+  customPanelOpen: false,
+  moreExpanded: new Set(), // item.key -> 已展开更多详情
   loading: false,
   fetching: false,
   expanded: new Set(),
@@ -64,6 +69,283 @@ const SORTERS = {
     (a.compression_count || 0) - (b.compression_count || 0) ||
     (a.updated_at || 0) - (b.updated_at || 0),
 };
+
+// 图表时间范围：以当前时间为基准向前截取；custom 使用自定义起止时间
+const CHART_RANGES = [
+  { value: "6h", seconds: 6 * 3600, label: ["chart_range_6h", "近 6 小时"] },
+  { value: "24h", seconds: 24 * 3600, label: ["chart_range_24h", "近 24 小时"] },
+  { value: "7d", seconds: 7 * 24 * 3600, label: ["chart_range_7d", "近 7 天"] },
+  { value: "30d", seconds: 30 * 24 * 3600, label: ["chart_range_30d", "近 30 天"] },
+  { value: "all", seconds: 0, label: ["chart_range_all", "全部"] },
+];
+const CHART_RANGE_VALUES = new Set(CHART_RANGES.map((range) => range.value));
+let chartClipSeq = 0; // 变化量曲线正负裁剪的唯一 ID
+
+function chartRangeConfig(value) {
+  return (
+    CHART_RANGES.find((range) => range.value === value) ||
+    CHART_RANGES[CHART_RANGES.length - 1]
+  );
+}
+
+function filterPointsByWindow(points, range) {
+  if (range.start == null && range.end == null) {
+    return points;
+  }
+  return points.filter(
+    (point) =>
+      (range.start == null || point.ts >= range.start) &&
+      (range.end == null || point.ts <= range.end),
+  );
+}
+
+function activeRangeWindow(allPoints, now = Date.now()) {
+  if (state.chartRange === "custom" && state.customRange) {
+    return { start: state.customRange.start, end: state.customRange.end };
+  }
+  const range = chartRangeConfig(state.chartRange);
+  if (!range.seconds) {
+    return { start: null, end: null };
+  }
+  return { start: now - range.seconds * 1000, end: now };
+}
+
+function focusRangeButton(container, value) {
+  const button = container.querySelector(
+    `.range-button[data-range="${value}"]`,
+  );
+  if (button) {
+    button.focus();
+  }
+}
+
+/** 图表主体切换动画：仅用于时间范围切换；展开时由曲线自身生长（用量自底部、变化量自左侧）。 */
+function animateChartBody(node, entrance = false) {
+  if (!node || entrance || typeof node.animate !== "function") {
+    return;
+  }
+  const reduced =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced) {
+    return;
+  }
+  node.getAnimations().forEach((animation) => animation.cancel());
+  node.animate(
+    [
+      { opacity: 0.3, transform: "translateY(5px) scale(0.996)" },
+      { opacity: 1, transform: "none" },
+    ],
+    { duration: 240, easing: "cubic-bezier(0.22, 1, 0.36, 1)" },
+  );
+}
+
+/** 展开时让曲线从图表底部向上揭开。 */
+function animateCurveReveal(rect, top, bottom, duration = 480) {
+  if (!rect) {
+    return;
+  }
+  const total = Math.max(0, bottom - top);
+  const reduced =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced || typeof requestAnimationFrame !== "function") {
+    rect.setAttribute("y", top);
+    rect.setAttribute("height", total);
+    return;
+  }
+  const start = performance.now();
+  const tick = (now) => {
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    const height = total * eased;
+    rect.setAttribute("y", bottom - height);
+    rect.setAttribute("height", height);
+    if (progress < 1 && rect.isConnected) {
+      requestAnimationFrame(tick);
+    }
+  };
+  rect.setAttribute("y", bottom);
+  rect.setAttribute("height", 0);
+  setTimeout(() => {
+    if (rect.isConnected) {
+      rect.setAttribute("y", top);
+      rect.setAttribute("height", total);
+    }
+  }, duration + 80);
+  requestAnimationFrame(tick);
+}
+
+/** 变化量曲线的展开动画：从左向右延伸。 */
+function animateCurveRevealHorizontal(rect, left, right, duration = 480) {
+  if (!rect) {
+    return;
+  }
+  const total = Math.max(0, right - left);
+  const reduced =
+    typeof window.matchMedia === "function" &&
+    window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+  if (reduced || typeof requestAnimationFrame !== "function") {
+    rect.setAttribute("x", left);
+    rect.setAttribute("width", total);
+    return;
+  }
+  const start = performance.now();
+  const tick = (now) => {
+    const progress = Math.min(1, (now - start) / duration);
+    const eased = 1 - Math.pow(1 - progress, 3);
+    rect.setAttribute("x", left);
+    rect.setAttribute("width", total * eased);
+    if (progress < 1 && rect.isConnected) {
+      requestAnimationFrame(tick);
+    }
+  };
+  rect.setAttribute("x", left);
+  rect.setAttribute("width", 0);
+  setTimeout(() => {
+    if (rect.isConnected) {
+      rect.setAttribute("x", left);
+      rect.setAttribute("width", total);
+    }
+  }, duration + 80);
+  requestAnimationFrame(tick);
+}
+
+function toDatetimeLocal(ms) {
+  const date = new Date(ms);
+  const pad = (input) => String(input).padStart(2, "0");
+  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(
+    date.getDate(),
+  )}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
+}
+
+function parseDatetimeLocal(value) {
+  if (!value) {
+    return null;
+  }
+  const ts = new Date(value).getTime();
+  return Number.isFinite(ts) ? ts : null;
+}
+
+/** 输入框精确到分钟；结束时间包含整分钟。 */
+function normalizeRangeWindow(start, end) {
+  return {
+    start: Math.floor(start / 60000) * 60000,
+    end: Math.floor(end / 60000) * 60000 + 59999,
+  };
+}
+
+function defaultCustomWindow(allPoints) {
+  if (state.customRange) {
+    return state.customRange;
+  }
+  const now = Date.now();
+  const range = chartRangeConfig(state.chartRange);
+  if (range.seconds) {
+    return normalizeRangeWindow(now - range.seconds * 1000, now);
+  }
+  if (allPoints.length) {
+    return normalizeRangeWindow(
+      allPoints[0].ts,
+      allPoints[allPoints.length - 1].ts,
+    );
+  }
+  return normalizeRangeWindow(now - 24 * 3600 * 1000, now);
+}
+
+function csvCell(value) {
+  const text = String(value ?? "");
+  return /[",\r\n]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}
+
+function fileStamp(ms) {
+  const date = new Date(ms);
+  const pad = (input) => String(input).padStart(2, "0");
+  return `${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(
+    date.getDate(),
+  )}-${pad(date.getHours())}${pad(date.getMinutes())}`;
+}
+
+function safeFileName(value) {
+  const text = String(value || "conversation").trim();
+  return text.replace(/[\\/:*?"<>|]+/g, "_").slice(0, 60) || "conversation";
+}
+
+function exportSamplesCsv(conversation, allPoints) {
+  const rangeWindow = activeRangeWindow(allPoints);
+  const points = filterPointsByWindow(allPoints, rangeWindow);
+  if (!points.length) {
+    setStatus(
+      t("export_empty", "当前时间范围内没有可导出的数据。"),
+      true,
+    );
+    return;
+  }
+
+  const indexByTs = new Map(allPoints.map((point, index) => [point.ts, index]));
+  const rows = [
+    [
+      t("csv_time", "时间（本地）"),
+      t("csv_tokens", "估算 tokens"),
+      t("csv_window", "上下文窗口"),
+      t("csv_usage", "占用率(%)"),
+      t("csv_delta", "变化量 tokens"),
+    ],
+  ];
+
+  for (const point of points) {
+    const index = indexByTs.get(point.ts) ?? 0;
+    const previous = index > 0 ? allPoints[index - 1] : null;
+    const usage =
+      point.window > 0
+        ? ((point.tokens / point.window) * 100).toFixed(2)
+        : "";
+    rows.push([
+      fmtTime(point.ts / 1000),
+      point.tokens,
+      point.window || "",
+      usage,
+      previous ? point.tokens - previous.tokens : "",
+    ]);
+  }
+
+  const csv = rows
+    .map((row) => row.map((cell) => csvCell(cell)).join(","))
+    .join("\r\n");
+  const title =
+    conversation?.title ||
+    conversation?.display_name ||
+    conversation?.session_id ||
+    conversation?.cid ||
+    "conversation";
+  const rangeTag = rangeWindow.start
+    ? `${fileStamp(rangeWindow.start)}-${fileStamp(rangeWindow.end)}`
+    : "all";
+  const filename = `context-${safeFileName(title)}-${rangeTag}.csv`;
+
+  try {
+    const blob = new Blob(["\ufeff", csv], {
+      type: "text/csv;charset=utf-8",
+    });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.download = filename;
+    link.style.display = "none";
+    document.body.append(link);
+    link.click();
+    link.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 1000);
+    setStatus(
+      tFormat("export_done", "已导出 %s 条采样（CSV）。", points.length),
+    );
+  } catch {
+    setStatus(
+      t("export_failed", "导出失败，请检查浏览器下载权限。"),
+      true,
+    );
+  }
+}
 
 // ---------------------------------------------------------------------------
 // 基础工具
@@ -153,6 +435,20 @@ function fmtTime(seconds) {
   )} ${pad(date.getHours())}:${pad(date.getMinutes())}`;
 }
 
+/** 图表 X 轴用短时间：6 小时内只显示时分，否则带月日。 */
+function fmtAxisTime(ms, spanMs) {
+  const date = new Date(ms);
+  if (Number.isNaN(date.getTime())) {
+    return "—";
+  }
+  const pad = (input) => String(input).padStart(2, "0");
+  const time = `${pad(date.getHours())}:${pad(date.getMinutes())}`;
+  if (spanMs <= 6 * 3600 * 1000) {
+    return time;
+  }
+  return `${pad(date.getMonth() + 1)}-${pad(date.getDate())} ${time}`;
+}
+
 function setStatus(message, isError = false) {
   els.status.textContent = message || "";
   els.status.classList.toggle("is-error", Boolean(isError && message));
@@ -211,7 +507,10 @@ function renderLabels() {
   const title = t("heading", "上下文看板");
   document.title = title;
   els.heading.textContent = title;
-  els.subtitle.textContent = t("subtitle", "每个对话的上下文用量与压缩次数");
+  els.subtitle.textContent = t(
+    "subtitle",
+    "按对话查看上下文占用、用量曲线与压缩情况",
+  );
   els.search.placeholder = t(
     "search_placeholder",
     "搜索对话、标题、会话或 ID…",
@@ -595,7 +894,7 @@ function toggleItem(item, article, body, head) {
   head.setAttribute("aria-expanded", "true");
   article.classList.add("open");
   expandBody(body);
-  loadDetail(item, body);
+  loadDetail(item, body, { entrance: true });
 }
 
 function stopBodyAnimations(body) {
@@ -656,11 +955,11 @@ function collapseBody(body) {
   };
 }
 
-async function loadDetail(item, container) {
+async function loadDetail(item, container, options = {}) {
   const key = item.key;
 
   if (state.details.has(key)) {
-    renderDetail(container, state.details.get(key));
+    renderDetail(container, state.details.get(key), key, options);
     return;
   }
 
@@ -677,7 +976,7 @@ async function loadDetail(item, container) {
       }),
     );
     state.details.set(key, payload);
-    renderDetail(container, payload);
+    renderDetail(container, payload, key, options);
   } catch (error) {
     const message = error?.message || String(error);
     container.replaceChildren(
@@ -686,7 +985,7 @@ async function loadDetail(item, container) {
   }
 }
 
-function renderDetail(container, payload) {
+function renderDetail(container, payload, key, options = {}) {
   const conversation = payload?.conversation;
   container.replaceChildren();
 
@@ -695,82 +994,445 @@ function renderDetail(container, payload) {
     return;
   }
 
+  const chartSection = h("div", "chart-section");
+  container.append(chartSection);
+  renderCharts(chartSection, conversation, payload?.samples, state.ui, {
+    entrance: options.entrance === true,
+  });
+
+  const expanded = state.moreExpanded.has(key);
+  const more = h("section", "detail-more");
+  const toggle = h(
+    "button",
+    `detail-more-toggle${expanded ? " is-open" : ""}`,
+  );
+  toggle.type = "button";
+  toggle.setAttribute("aria-expanded", expanded ? "true" : "false");
+  toggle.title = t("detail_more_hint", "查看上下文概览与上下文策略");
+
+  const label = h(
+    "span",
+    "detail-more-label",
+    expanded
+      ? t("detail_more_collapse", "收起更多详情")
+      : t("detail_more_expand", "展开更多详情"),
+  );
+  const chevron = h("span", "detail-more-chevron", "›");
+  chevron.setAttribute("aria-hidden", "true");
+  toggle.append(label, chevron);
+
+  const body = h("div", "detail-more-body");
+  body.hidden = !expanded;
+  let rendered = false;
+  const renderBody = () => {
+    if (rendered) {
+      return;
+    }
+    rendered = true;
+    renderSummaryTable(body, conversation);
+    renderPolicy(body, conversation.policy);
+  };
+  if (expanded) {
+    renderBody();
+  }
+
+  toggle.addEventListener("click", () => {
+    const next = !state.moreExpanded.has(key);
+    if (next) {
+      state.moreExpanded.add(key);
+      renderBody();
+    } else {
+      state.moreExpanded.delete(key);
+    }
+    body.hidden = !next;
+    toggle.classList.toggle("is-open", next);
+    toggle.setAttribute("aria-expanded", next ? "true" : "false");
+    label.textContent = next
+      ? t("detail_more_collapse", "收起更多详情")
+      : t("detail_more_expand", "展开更多详情");
+  });
+
+  more.append(toggle, body);
+  container.append(more);
+}
+
+// ---------------------------------------------------------------------------
+// 详情表格
+// ---------------------------------------------------------------------------
+
+function markerPercent() {
+  const marker = state.ui?.compression_marker || { enabled: true, percent: 82 };
+  return Math.max(1, Math.min(100, Number(marker.percent) || 82));
+}
+
+async function copyText(value) {
+  const text = String(value ?? "");
+  if (!text) {
+    return false;
+  }
+  try {
+    if (
+      navigator.clipboard &&
+      typeof navigator.clipboard.writeText === "function"
+    ) {
+      await navigator.clipboard.writeText(text);
+      return true;
+    }
+  } catch {
+    // 权限受限时回退到 execCommand
+  }
+  try {
+    const area = document.createElement("textarea");
+    area.value = text;
+    area.setAttribute("readonly", "");
+    area.style.position = "fixed";
+    area.style.top = "-1000px";
+    area.style.opacity = "0";
+    document.body.append(area);
+    area.select();
+    const copied =
+      typeof document.execCommand === "function" && document.execCommand("copy");
+    area.remove();
+    return Boolean(copied);
+  } catch {
+    return false;
+  }
+}
+
+function copyButton(
+  getValue,
+  label = t("detail_copy", "复制"),
+  extraClass,
+) {
+  const button = h(
+    "button",
+    `copy-button${extraClass ? ` ${extraClass}` : ""}`,
+    label,
+  );
+  button.type = "button";
+  button.setAttribute("aria-label", label);
+  const initial = String(getValue() ?? "");
+  button.disabled = !initial;
+  if (!initial) {
+    button.title = t("detail_copy_empty", "没有可复制的内容");
+  }
+
+  button.addEventListener("click", async (event) => {
+    event.stopPropagation();
+    const text = String(getValue() ?? "");
+    if (!text) {
+      return;
+    }
+    const copied = await copyText(text);
+    button.textContent = copied
+      ? t("detail_copied", "已复制")
+      : t("detail_copy_failed", "复制失败");
+    button.classList.toggle("is-copied", copied);
+    button.classList.toggle("is-error", !copied);
+    clearTimeout(button.copyTimer);
+    button.copyTimer = setTimeout(() => {
+      button.textContent = label;
+      button.classList.remove("is-copied", "is-error");
+    }, 1400);
+  });
+
+  return button;
+}
+
+function buildDataTable(options) {
+  const table = h(
+    "table",
+    `data-table${options.className ? ` ${options.className}` : ""}`,
+  );
+
+  const head = h("thead");
+  const headRow = h("tr");
+  options.columns.forEach((column, index) => {
+    const cell = h(
+      "th",
+      index === options.columns.length - 1 ? "cell-actions" : null,
+      column,
+    );
+    cell.scope = "col";
+    headRow.append(cell);
+  });
+  head.append(headRow);
+  table.append(head);
+
+  const body = h("tbody");
+  for (const row of options.rows) {
+    if (row.section) {
+      const tr = h("tr", "table-section");
+      const cell = h("th", null, row.section);
+      cell.colSpan = options.columns.length;
+      cell.scope = "colgroup";
+      tr.append(cell);
+      body.append(tr);
+      continue;
+    }
+
+    const tr = h("tr");
+    const labelCell = h("th", `cell-label${row.mono ? " is-mono" : ""}`);
+    labelCell.scope = "row";
+    labelCell.append(document.createTextNode(row.label));
+    if (row.hint) {
+      labelCell.title = row.hint;
+    }
+    tr.append(labelCell);
+
+    const valueCell = h("td", "cell-value");
+    if (row.node) {
+      valueCell.append(row.node);
+    } else {
+      valueCell.textContent = row.value ?? "—";
+    }
+    tr.append(valueCell);
+
+    const actionCell = h("td", "cell-actions");
+    actionCell.append(copyButton(() => row.copy ?? row.value ?? ""));
+    tr.append(actionCell);
+    body.append(tr);
+  }
+  table.append(body);
+  return table;
+}
+
+function renderTableBlock(container, options) {
+  const block = h("section", "detail-table-block");
+  const toolbar = h("div", "table-toolbar");
+  toolbar.append(h("div", "detail-subtitle", options.title));
+
+  if (options.copyAll) {
+    const actions = h("div", "table-actions");
+    actions.append(
+      copyButton(options.copyAll, t("detail_copy_all", "复制全部"), "is-ghost"),
+    );
+    toolbar.append(actions);
+  }
+  block.append(toolbar);
+
+  const scroll = h("div", "table-scroll");
+  scroll.append(buildDataTable(options));
+  block.append(scroll);
+  container.append(block);
+  return block;
+}
+
+function usageTone(ratio) {
+  if (ratio >= markerPercent() / 100) {
+    return "danger";
+  }
+  if (ratio >= 0.5) {
+    return "warn";
+  }
+  return "";
+}
+
+function metricUsageNode(ratio) {
+  const wrap = h("div", "metric-usage");
+  const bar = h("div", "bar");
+  const fill = h("span");
+  fill.style.width = `${(Math.max(0, Math.min(1, ratio)) * 100).toFixed(1)}%`;
+  const tone = usageTone(ratio);
+  if (tone) {
+    fill.className = `is-${tone}`;
+  }
+  bar.append(fill);
+
+  const marker = state.ui?.compression_marker || { enabled: true, percent: 82 };
+  if (marker.enabled !== false) {
+    const thresholdPercent = markerPercent();
+    const threshold = h("i", "bar-threshold");
+    threshold.style.left = `${thresholdPercent}%`;
+    threshold.title = tFormat(
+      "compression_threshold_hint",
+      "约 %s% 触发上下文压缩（AstrBot 默认行为）",
+      thresholdPercent,
+    );
+    bar.append(threshold);
+  }
+
+  const percent = h(
+    "span",
+    `metric-usage-percent${tone ? ` is-${tone}` : ""}`,
+    fmtPercent(ratio),
+  );
+  wrap.append(bar, percent);
+  return wrap;
+}
+
+function summaryRows(conversation) {
   const userStat = conversation.role_stats?.user || { messages: 0, chars: 0 };
   const assistantStat = conversation.role_stats?.assistant || {
     messages: 0,
     chars: 0,
   };
+  const rawRatio = Number(conversation.usage_ratio);
+  const ratio =
+    conversation.usage_ratio != null && Number.isFinite(rawRatio)
+      ? Math.max(0, Math.min(1, rawRatio))
+      : null;
+  const window = Number(conversation.context_window) || 0;
+  const threshold = markerPercent();
 
-  const grid = h("div", "detail-grid");
-  const appendCell = (label, value) => {
-    const cell = h("div", "detail-cell");
-    cell.append(h("span", "detail-label", label));
-    cell.append(h("span", "detail-value", value));
-    grid.append(cell);
-  };
+  return [
+    { section: t("detail_section_usage", "用量与容量") },
+    {
+      label: t("est_tokens", "估算 tokens"),
+      hint: t(
+        "detail_hint_tokens",
+        "按历史字符估算的上下文 token 数，用于了解大致用量，不等同于模型计费。",
+      ),
+      value: fmtNumber(conversation.tokens),
+      copy: conversation.tokens ?? "",
+    },
+    {
+      label: t("detail_window", "上下文窗口"),
+      hint: t(
+        "detail_hint_window",
+        "当前模型配置的上下文窗口大小；未读取到时显示「窗口未知」。",
+      ),
+      value: window ? fmtNumber(window) : t("window_unknown", "窗口未知"),
+      copy: window || "",
+    },
+    {
+      label: t("detail_usage", "占用率"),
+      hint: tFormat(
+        "detail_hint_usage",
+        "已用 tokens ÷ 上下文窗口；达到约 %s% 时 AstrBot 会触发压缩。",
+        threshold,
+      ),
+      node: ratio != null ? metricUsageNode(ratio) : null,
+      value: ratio != null ? fmtPercent(ratio) : "—",
+      copy: ratio != null ? fmtPercent(ratio) : "",
+    },
+    {
+      label: t("detail_remaining", "剩余 tokens"),
+      hint: t(
+        "detail_hint_remaining",
+        "上下文窗口减去已用 tokens 后，还能容纳的估算 token 数。",
+      ),
+      value:
+        conversation.remaining_tokens != null
+          ? fmtNumber(conversation.remaining_tokens)
+          : "—",
+      copy: conversation.remaining_tokens ?? "",
+    },
+    {
+      label: t("stat_compression", "压缩记录"),
+      hint: t(
+        "detail_hint_compression",
+        "从历史记录中检测到的上下文压缩次数，用于判断压缩是否频繁。",
+      ),
+      value: fmtNumber(conversation.compression_count),
+      copy: conversation.compression_count ?? "",
+    },
+    { section: t("detail_section_messages", "消息构成") },
+    {
+      label: t("stat_messages", "消息"),
+      hint: t("detail_hint_messages", "当前历史包含的消息总条数。"),
+      value: fmtNumber(conversation.messages),
+      copy: conversation.messages ?? "",
+    },
+    {
+      label: t("role_user", "用户"),
+      hint: t("detail_hint_role_user", "用户消息的条数与字符数。"),
+      value: tFormat(
+        "role_stat_compact",
+        "%s 条 / %s 字",
+        fmtNumber(userStat.messages),
+        fmtNumber(userStat.chars),
+      ),
+      copy: tFormat(
+        "role_stat_compact",
+        "%s 条 / %s 字",
+        fmtNumber(userStat.messages),
+        fmtNumber(userStat.chars),
+      ),
+    },
+    {
+      label: t("role_assistant", "助手"),
+      hint: t("detail_hint_role_assistant", "助手消息的条数与字符数。"),
+      value: tFormat(
+        "role_stat_compact",
+        "%s 条 / %s 字",
+        fmtNumber(assistantStat.messages),
+        fmtNumber(assistantStat.chars),
+      ),
+      copy: tFormat(
+        "role_stat_compact",
+        "%s 条 / %s 字",
+        fmtNumber(assistantStat.messages),
+        fmtNumber(assistantStat.chars),
+      ),
+    },
+    {
+      label: t("detail_chars", "字符"),
+      hint: t(
+        "detail_hint_chars",
+        "历史消息的总字符数，包含用户与助手消息。",
+      ),
+      value: fmtNumber(conversation.chars),
+      copy: conversation.chars ?? "",
+    },
+    { section: t("detail_section_session", "会话信息") },
+    {
+      label: t("detail_session", "会话"),
+      hint: t("detail_hint_session", "会话名称（会话 ID）。"),
+      value: conversation.display_name
+        ? `${conversation.display_name}(${conversation.session_id})`
+        : conversation.session_id || "—",
+      copy: conversation.session_id || "",
+    },
+    {
+      label: t("detail_model", "模型提供商"),
+      hint: t("detail_hint_model", "当前会话使用的模型提供商 ID。"),
+      value: conversation.provider_id || "—",
+      copy: conversation.provider_id || "",
+    },
+    {
+      label: t("detail_history_size", "历史大小"),
+      hint: t(
+        "detail_hint_history_size",
+        "历史字符串按 UTF-8 计算的大小，反映原始存储占用。",
+      ),
+      value: fmtBytes(conversation.history_bytes),
+      copy: conversation.history_bytes ?? "",
+    },
+    {
+      label: t("detail_created", "创建时间"),
+      hint: t("detail_hint_created", "会话首次创建的时间。"),
+      value: fmtTime(conversation.created_at),
+      copy: fmtTime(conversation.created_at),
+    },
+    {
+      label: t("detail_updated", "更新时间"),
+      hint: t("detail_hint_updated", "会话最后一次更新的时间。"),
+      value: fmtTime(conversation.updated_at),
+      copy: fmtTime(conversation.updated_at),
+    },
+  ];
+}
 
-  appendCell(t("stat_messages", "消息"), fmtNumber(conversation.messages));
-  appendCell(t("est_tokens", "估算 tokens"), fmtNumber(conversation.tokens));
-  appendCell(t("detail_chars", "字符"), fmtNumber(conversation.chars));
-  appendCell(
-    t("role_user", "用户"),
-    tFormat(
-      "role_stat_compact",
-      "%s 条 / %s 字",
-      fmtNumber(userStat.messages),
-      fmtNumber(userStat.chars),
-    ),
-  );
-  appendCell(
-    t("role_assistant", "助手"),
-    tFormat(
-      "role_stat_compact",
-      "%s 条 / %s 字",
-      fmtNumber(assistantStat.messages),
-      fmtNumber(assistantStat.chars),
-    ),
-  );
-  appendCell(
-    t("detail_window", "上下文窗口"),
-    conversation.context_window
-      ? fmtNumber(conversation.context_window)
-      : t("window_unknown", "窗口未知"),
-  );
-  appendCell(
-    t("detail_usage", "占用率"),
-    conversation.usage_ratio != null
-      ? fmtPercent(conversation.usage_ratio)
-      : "—",
-  );
-  appendCell(
-    t("detail_remaining", "剩余 tokens"),
-    conversation.remaining_tokens != null
-      ? fmtNumber(conversation.remaining_tokens)
-      : "—",
-  );
-  appendCell(
-    t("stat_compression", "压缩记录"),
-    fmtNumber(conversation.compression_count),
-  );
-  appendCell(
-    t("detail_session", "会话"),
-    conversation.display_name
-      ? `${conversation.display_name}(${conversation.session_id})`
-      : conversation.session_id || "—",
-  );
-  appendCell(
-    t("detail_model", "模型提供商"),
-    conversation.provider_id || "—",
-  );
-  appendCell(
-    t("detail_history_size", "历史大小"),
-    fmtBytes(conversation.history_bytes),
-  );
-  appendCell(t("detail_created", "创建时间"), fmtTime(conversation.created_at));
-  appendCell(t("detail_updated", "更新时间"), fmtTime(conversation.updated_at));
-  container.append(grid);
-  renderPolicy(container, conversation.policy);
-  renderCharts(container, conversation, payload?.samples, state.ui);
+function renderSummaryTable(container, conversation) {
+  const rows = summaryRows(conversation);
+  renderTableBlock(container, {
+    title: t("detail_overview", "上下文概览"),
+    columns: [
+      t("detail_col_metric", "指标"),
+      t("detail_col_value", "数值"),
+      t("detail_col_action", "操作"),
+    ],
+    rows,
+    copyAll: () =>
+      rows
+        .filter((row) => row.label && !row.section)
+        .map(
+          (row) =>
+            `${row.label}: ${row.copy !== "" ? row.copy : row.value ?? "—"}`,
+        )
+        .join("\n"),
+  });
 }
 
 const POLICY_LABELS = {
@@ -804,16 +1466,35 @@ function formatPolicyValue(key, value) {
   return String(value);
 }
 
+function policyValueNode(text) {
+  const value = String(text ?? "");
+  if (value.length <= 120) {
+    return null;
+  }
+  const wrap = h("div", "policy-value-wrap");
+  const clamped = h("span", "value-clamp", value);
+  const toggle = h("button", "link-button", t("detail_expand", "展开"));
+  toggle.type = "button";
+  toggle.addEventListener("click", (event) => {
+    event.stopPropagation();
+    const expanded = clamped.classList.toggle("is-expanded");
+    toggle.textContent = expanded
+      ? t("detail_collapse", "收起")
+      : t("detail_expand", "展开");
+  });
+  wrap.append(clamped, toggle);
+  return wrap;
+}
+
 function renderPolicy(container, policy) {
   if (!policy) {
     return;
   }
   const entries = Array.isArray(policy.entries) ? policy.entries : [];
   if (!entries.length) {
-    container.append(
-      h("div", "detail-subtitle", t("policy_title", "上下文策略")),
-    );
-    container.append(
+    const block = h("section", "detail-table-block");
+    block.append(h("div", "detail-subtitle", t("policy_title", "上下文策略")));
+    block.append(
       h(
         "p",
         "hint",
@@ -825,32 +1506,39 @@ function renderPolicy(container, policy) {
             ),
       ),
     );
+    container.append(block);
     return;
   }
-  container.append(
-    h("div", "detail-subtitle", t("policy_title", "上下文策略")),
-  );
-  const list = h("div", "policy-list");
-  for (const entry of entries) {
-    const row = h("div", "policy-item");
-    const label = POLICY_LABELS[entry.key];
-    row.append(
-      h("span", "policy-label", label ? t(label[0], label[1]) : entry.key),
-    );
-    row.append(
-      h(
-        "span",
-        "policy-value",
-        formatPolicyValue(entry.key, entry.value),
-      ),
-    );
-    row.title = entry.path || entry.key;
-    list.append(row);
-  }
-  container.append(list);
+
+  const rows = entries.map((entry) => {
+    const meta = POLICY_LABELS[entry.key];
+    const display = formatPolicyValue(entry.key, entry.value);
+    return {
+      label: meta ? t(meta[0], meta[1]) : entry.key,
+      mono: !meta,
+      hint: entry.path || entry.key,
+      value: display,
+      copy: display,
+      node: policyValueNode(display),
+    };
+  });
+
+  renderTableBlock(container, {
+    title: t("policy_title", "上下文策略"),
+    columns: [
+      t("policy_col_item", "配置项"),
+      t("policy_col_value", "当前值"),
+      t("policy_col_action", "操作"),
+    ],
+    rows,
+    className: "policy-table",
+    copyAll: () => rows.map((row) => `${row.label}: ${row.copy}`).join("\n"),
+  });
 }
 
-function renderCharts(container, conversation, samples, ui) {
+function renderCharts(container, conversation, samples, ui, options = {}) {
+  container.replaceChildren();
+
   const charts = ui?.charts || {};
   const showUsage = charts.usage !== false;
   const showGrowth = charts.growth !== false;
@@ -858,7 +1546,7 @@ function renderCharts(container, conversation, samples, ui) {
     return;
   }
 
-  const points = (Array.isArray(samples) ? samples : [])
+  const allPoints = (Array.isArray(samples) ? samples : [])
     .filter(
       (point) =>
         Array.isArray(point) &&
@@ -873,7 +1561,7 @@ function renderCharts(container, conversation, samples, ui) {
     }))
     .sort((a, b) => a.ts - b.ts);
 
-  if (!points.length) {
+  if (!allPoints.length) {
     container.append(
       h(
         "p",
@@ -887,14 +1575,183 @@ function renderCharts(container, conversation, samples, ui) {
     return;
   }
 
+  const now = Date.now();
+  const rangeWindow = activeRangeWindow(allPoints, now);
+  const points = filterPointsByWindow(allPoints, rangeWindow);
+  const rerender = () => {
+    renderCharts(container, conversation, samples, ui);
+  };
+  const zoomToRange = (startTs, endTs) => {
+    if (!Number.isFinite(startTs) || !Number.isFinite(endTs)) {
+      return;
+    }
+    if (endTs - startTs < 60 * 1000) {
+      return;
+    }
+    state.customRange = normalizeRangeWindow(startTs, endTs);
+    state.chartRange = "custom";
+    state.customPanelOpen = true;
+    rerender();
+  };
+
+  const toolbar = h("div", "chart-toolbar");
+  toolbar.append(
+    h("span", "chart-toolbar-title", t("chart_range_label", "时间范围")),
+  );
+
+  const switchGroup = h("div", "range-switch");
+  switchGroup.setAttribute("role", "group");
+  switchGroup.setAttribute("aria-label", t("chart_range_label", "时间范围"));
+  for (const option of CHART_RANGES) {
+    const [key, fallback] = option.label;
+    const active = option.value === state.chartRange;
+    const count =
+      option.seconds === 0
+        ? allPoints.length
+        : filterPointsByWindow(allPoints, {
+            start: now - option.seconds * 1000,
+            end: now,
+          }).length;
+    const button = h("button", "range-button", t(key, fallback));
+    button.type = "button";
+    button.dataset.range = option.value;
+    button.setAttribute("aria-pressed", active ? "true" : "false");
+    button.title = count
+      ? tFormat("chart_sample_count", "%s 个采样", count)
+      : t("chart_range_no_data", "该时间范围内没有采样");
+    button.addEventListener("click", () => {
+      if (state.chartRange === option.value) {
+        return;
+      }
+      state.chartRange = option.value;
+      state.lastPresetRange = option.value;
+      state.customPanelOpen = false;
+      persistPreferences();
+      rerender();
+      focusRangeButton(container, option.value);
+    });
+    switchGroup.append(button);
+  }
+
+  const customActive = state.chartRange === "custom";
+  const customButton = h(
+    "button",
+    "range-button",
+    t("chart_range_custom", "自定义"),
+  );
+  customButton.type = "button";
+  customButton.dataset.range = "custom";
+  customButton.setAttribute("aria-pressed", customActive ? "true" : "false");
+  customButton.title = customActive
+    ? tFormat("chart_sample_count", "%s 个采样", points.length)
+    : t("chart_range_custom_hint", "选择开始与结束时间");
+  customButton.addEventListener("click", () => {
+    if (state.chartRange === "custom" && state.customPanelOpen) {
+      state.customPanelOpen = false;
+      rerender();
+      focusRangeButton(container, "custom");
+      return;
+    }
+    if (!state.customRange) {
+      state.customRange = defaultCustomWindow(allPoints);
+    }
+    state.chartRange = "custom";
+    state.customPanelOpen = true;
+    rerender();
+    focusRangeButton(container, "custom");
+  });
+  switchGroup.append(customButton);
+  toolbar.append(switchGroup);
+
+  const actions = h("div", "chart-toolbar-actions");
+  actions.append(
+    h(
+      "span",
+      "chart-range-meta",
+      tFormat(
+        "chart_sample_count_filtered",
+        "%s / %s 个采样",
+        points.length,
+        allPoints.length,
+      ),
+    ),
+  );
+
+  const exportButton = h(
+    "button",
+    "export-button",
+    t("export_csv", "导出 CSV"),
+  );
+  exportButton.type = "button";
+  exportButton.disabled = !points.length;
+  exportButton.title = points.length
+    ? tFormat("export_hint", "导出当前时间范围内的 %s 条采样", points.length)
+    : t("export_empty", "当前时间范围内没有可导出的数据。");
+  exportButton.addEventListener("click", () => {
+    exportSamplesCsv(conversation, allPoints);
+  });
+  actions.append(exportButton);
+  toolbar.append(actions);
+  container.append(toolbar);
+  container.append(buildCustomPanel(allPoints, rerender));
+
+  const chartBody = h("div", "chart-body");
+  container.append(chartBody);
+
+  if (!points.length) {
+    const empty = h("div", "chart-empty");
+    empty.append(
+      h(
+        "p",
+        "hint",
+        t(
+          "chart_range_empty",
+          "该时间范围内没有采样数据，试试扩大范围。",
+        ),
+      ),
+    );
+    const reset = h(
+      "button",
+      "ghost-button",
+      t("chart_range_reset", "查看全部"),
+    );
+    reset.type = "button";
+    reset.addEventListener("click", () => {
+      state.chartRange = "all";
+      state.lastPresetRange = "all";
+      state.customPanelOpen = false;
+      persistPreferences();
+      rerender();
+      focusRangeButton(container, "all");
+    });
+    empty.append(reset);
+    chartBody.append(empty);
+    animateChartBody(chartBody, options.entrance === true);
+    return;
+  }
+
+  chartBody.append(
+    h(
+      "p",
+      "chart-note",
+      t(
+        "chart_curve_note",
+        "*横向拖动可放大到所选时间段",
+      ),
+    ),
+  );
+
   const marker = ui?.compression_marker;
   if (showUsage) {
-    container.append(
+    chartBody.append(
       h("div", "detail-subtitle", t("chart_usage", "上下文用量曲线")),
     );
-    container.append(
+    chartBody.append(
       buildChart(points, {
         mode: "usage",
+        allPoints,
+        onZoom: zoomToRange,
+        entrance: options.entrance === true,
         markerPercent:
           marker && marker.enabled !== false ? Number(marker.percent) : null,
         window: Number(conversation?.context_window) || 0,
@@ -902,11 +1759,124 @@ function renderCharts(container, conversation, samples, ui) {
     );
   }
   if (showGrowth) {
-    container.append(
-      h("div", "detail-subtitle", t("chart_growth", "上下文增量曲线")),
+    chartBody.append(
+      h("div", "detail-subtitle", t("chart_growth", "上下文变化量曲线")),
     );
-    container.append(buildChart(points, { mode: "growth" }));
+    chartBody.append(
+      buildChart(points, {
+        mode: "growth",
+        allPoints,
+        onZoom: zoomToRange,
+        entrance: options.entrance === true,
+      }),
+    );
   }
+  animateChartBody(chartBody, options.entrance === true);
+}
+
+/** 单调三次插值：曲线经过每个节点，并避免节点间过冲。 */
+function buildMonotonePath(series, x, y) {
+  if (!series.length) {
+    return "";
+  }
+  if (series.length === 1) {
+    return `M${x(series[0].ts).toFixed(2)},${y(series[0].value).toFixed(2)}`;
+  }
+
+  const xs = series.map((entry) => x(entry.ts));
+  const ys = series.map((entry) => y(entry.value));
+  const widths = [];
+  const secants = [];
+  for (let index = 0; index < series.length - 1; index += 1) {
+    const width = xs[index + 1] - xs[index];
+    widths.push(width);
+    secants.push(width === 0 ? 0 : (ys[index + 1] - ys[index]) / width);
+  }
+
+  const slopes = new Array(series.length).fill(0);
+  slopes[0] = secants[0];
+  slopes[series.length - 1] = secants[secants.length - 1];
+  for (let index = 1; index < series.length - 1; index += 1) {
+    const before = secants[index - 1];
+    const after = secants[index];
+    if (before * after <= 0) {
+      slopes[index] = 0;
+      continue;
+    }
+    const average = (before + after) / 2;
+    const limit = 3 * Math.min(Math.abs(before), Math.abs(after));
+    slopes[index] = Math.sign(average) * Math.min(Math.abs(average), limit);
+  }
+
+  let path = `M${xs[0].toFixed(2)},${ys[0].toFixed(2)}`;
+  for (let index = 0; index < series.length - 1; index += 1) {
+    const width = widths[index];
+    const x1 = xs[index] + width / 3;
+    const y1 = ys[index] + (slopes[index] * width) / 3;
+    const x2 = xs[index + 1] - width / 3;
+    const y2 = ys[index + 1] - (slopes[index + 1] * width) / 3;
+    path += ` C${x1.toFixed(2)},${y1.toFixed(2)} ${x2.toFixed(
+      2,
+    )},${y2.toFixed(2)} ${xs[index + 1].toFixed(2)},${ys[
+      index + 1
+    ].toFixed(2)}`;
+  }
+  return path;
+}
+
+function buildCustomPanel(allPoints, rerender) {  const rangeWindow = state.customRange || defaultCustomWindow(allPoints);
+  const panel = h("div", "range-custom");
+  panel.hidden = !state.customPanelOpen;
+
+  const startField = h("label", "range-custom-field");
+  startField.append(h("span", null, t("range_custom_start", "开始")));
+  const startInput = document.createElement("input");
+  startInput.type = "datetime-local";
+  startInput.step = "60";
+  startInput.className = "range-input";
+  startInput.value = toDatetimeLocal(rangeWindow.start);
+  startField.append(startInput);
+
+  const separator = h("span", "range-custom-sep", "→");
+
+  const endField = h("label", "range-custom-field");
+  endField.append(h("span", null, t("range_custom_end", "结束")));
+  const endInput = document.createElement("input");
+  endInput.type = "datetime-local";
+  endInput.step = "60";
+  endInput.className = "range-input";
+  endInput.value = toDatetimeLocal(rangeWindow.end);
+  endField.append(endInput);
+
+  const apply = h(
+    "button",
+    "ghost-button",
+    t("range_custom_apply", "应用"),
+  );
+  apply.type = "button";
+
+  const error = h("span", "range-custom-error");
+  error.setAttribute("role", "alert");
+
+  apply.addEventListener("click", () => {
+    const start = parseDatetimeLocal(startInput.value);
+    const end = parseDatetimeLocal(endInput.value);
+    if (start == null || end == null || start > end) {
+      error.textContent = t(
+        "range_custom_invalid",
+        "请选择有效的开始和结束时间（开始不能晚于结束）。",
+      );
+      return;
+    }
+    error.textContent = "";
+    state.customRange = normalizeRangeWindow(start, end);
+    state.chartRange = "custom";
+    state.customPanelOpen = true;
+    rerender();
+  });
+
+  panel.append(startField, separator, endField, apply, error);
+  return panel;
 }
 
 function buildChart(points, options = {}) {
@@ -916,9 +1886,16 @@ function buildChart(points, options = {}) {
   const pad = 10;
   const ns = "http://www.w3.org/2000/svg";
 
+  const source =
+    Array.isArray(options.allPoints) && options.allPoints.length
+      ? options.allPoints
+      : points;
+  const sourceIndex = new Map(source.map((point, index) => [point.ts, index]));
   const series = points.map((point, index) => {
     if (mode === "growth") {
-      const previous = points[Math.max(0, index - 1)];
+      const found = sourceIndex.get(point.ts);
+      const currentIndex = found === undefined ? index : found;
+      const previous = currentIndex > 0 ? source[currentIndex - 1] : point;
       return {
         ts: point.ts,
         value: point.tokens - previous.tokens,
@@ -947,15 +1924,18 @@ function buildChart(points, options = {}) {
   const y = (value) =>
     height - pad - ((value - minValue) / valueSpan) * (height - pad * 2);
 
+  const chartTitle =
+    mode === "growth"
+      ? t("chart_growth", "上下文变化量曲线")
+      : t("chart_usage", "上下文用量曲线");
+
   const svg = document.createElementNS(ns, "svg");
   svg.setAttribute("viewBox", `0 0 ${width} ${height}`);
   svg.setAttribute("preserveAspectRatio", "none");
   svg.setAttribute("class", "chart");
   svg.setAttribute(
     "aria-label",
-    mode === "growth"
-      ? t("chart_growth", "上下文增量曲线")
-      : t("chart_usage", "上下文用量曲线"),
+    `${chartTitle}，${fmtTime(minTs / 1000)} 至 ${fmtTime(maxTs / 1000)}`,
   );
 
   const line = (x1, y1, x2, y2, className) => {
@@ -971,28 +1951,58 @@ function buildChart(points, options = {}) {
   };
 
   line(pad, height - pad, width - pad, height - pad, "chart-axis");
+  const midValue = minValue + (maxValue - minValue) / 2;
+  line(pad, y(midValue), width - pad, y(midValue), "chart-grid");
 
-  const lineData = series
-    .map(
-      (entry, index) =>
-        `${index === 0 ? "M" : "L"}${x(entry.ts).toFixed(1)},${y(
-          entry.value,
-        ).toFixed(1)}`,
-    )
-    .join(" ");
+  // 平滑单调曲线：经过每个节点，同时避免节点间过冲
+  const curveLineData = buildMonotonePath(series, x, y);
+
+  const wantsReveal = options.entrance === true;
+  let revealRect = null;
+  let revealClipValue = null;
+  if (wantsReveal) {
+    const revealId = `chart-reveal-${(chartClipSeq += 1)}`;
+    const defs = document.createElementNS(ns, "defs");
+    const revealClip = document.createElementNS(ns, "clipPath");
+    revealClip.setAttribute("id", revealId);
+    revealRect = document.createElementNS(ns, "rect");
+    if (mode === "growth") {
+      revealRect.setAttribute("x", pad - 1);
+      revealRect.setAttribute("y", pad - 1);
+      revealRect.setAttribute("width", 0);
+      revealRect.setAttribute("height", height - pad * 2 + 2);
+    } else {
+      revealRect.setAttribute("x", 0);
+      revealRect.setAttribute("width", width);
+      revealRect.setAttribute("y", height - pad + 1);
+      revealRect.setAttribute("height", 0);
+    }
+    revealClip.append(revealRect);
+    defs.append(revealClip);
+    svg.append(defs);
+    revealClipValue = `url(#${revealId})`;
+  }
+
+  const areaGroup = document.createElementNS(ns, "g");
+  const curveGroup = document.createElementNS(ns, "g");
+  if (revealClipValue) {
+    areaGroup.setAttribute("clip-path", revealClipValue);
+    curveGroup.setAttribute("clip-path", revealClipValue);
+  }
 
   if (mode === "usage" && series.length > 1) {
     const area = document.createElementNS(ns, "path");
     area.setAttribute(
       "d",
-      `${lineData} L${x(series[series.length - 1].ts).toFixed(1)},${(
+      `${curveLineData} L${x(series[series.length - 1].ts).toFixed(1)},${(
         height - pad
       ).toFixed(1)} L${x(series[0].ts).toFixed(1)},${(height - pad).toFixed(
         1,
       )} Z`,
     );
     area.setAttribute("class", "chart-area");
-    svg.append(area);
+    areaGroup.append(area);
+    svg.append(areaGroup);
   }
 
   if (mode === "growth") {
@@ -1012,44 +2022,67 @@ function buildChart(points, options = {}) {
   }
 
   if (mode === "growth") {
-    const positive = [];
-    const negative = [];
-    for (let index = 0; index < series.length - 1; index += 1) {
-      const current = series[index];
-      const next = series[index + 1];
-      const segment = `M${x(current.ts).toFixed(1)},${y(
-        current.value,
-      ).toFixed(1)} L${x(next.ts).toFixed(1)},${y(next.value).toFixed(1)}`;
-      if (current.value + next.value < 0) {
-        negative.push(segment);
-      } else {
-        positive.push(segment);
-      }
-    }
-    if (positive.length) {
-      const path = document.createElementNS(ns, "path");
-      path.setAttribute("d", positive.join(" "));
-      path.setAttribute("class", "chart-line");
-      svg.append(path);
-    }
-    if (negative.length) {
-      const path = document.createElementNS(ns, "path");
-      path.setAttribute("d", negative.join(" "));
-      path.setAttribute("class", "chart-line-negative");
-      svg.append(path);
-    }
+    const zeroY = y(0);
+    const clipId = `chart-clip-${(chartClipSeq += 1)}`;
+    const defs = document.createElementNS(ns, "defs");
+
+    const positiveClip = document.createElementNS(ns, "clipPath");
+    positiveClip.setAttribute("id", `${clipId}-pos`);
+    const positiveRect = document.createElementNS(ns, "rect");
+    positiveRect.setAttribute("x", 0);
+    positiveRect.setAttribute("y", 0);
+    positiveRect.setAttribute("width", width);
+    positiveRect.setAttribute("height", Math.max(0, zeroY));
+    positiveClip.append(positiveRect);
+
+    const negativeClipOffset = 1;
+    const negativeClip = document.createElementNS(ns, "clipPath");
+    negativeClip.setAttribute("id", `${clipId}-neg`);
+    const negativeRect = document.createElementNS(ns, "rect");
+    negativeRect.setAttribute("x", 0);
+    negativeRect.setAttribute("y", zeroY + negativeClipOffset);
+    negativeRect.setAttribute("width", width);
+    negativeRect.setAttribute(
+      "height",
+      Math.max(0, height - zeroY - negativeClipOffset),
+    );
+    negativeClip.append(negativeRect);
+
+    defs.append(positiveClip, negativeClip);
+    svg.append(defs);
+
+    const positivePath = document.createElementNS(ns, "path");
+    positivePath.setAttribute("d", curveLineData);
+    positivePath.setAttribute("class", "chart-line");
+    positivePath.setAttribute("clip-path", `url(#${clipId}-pos)`);
+    curveGroup.append(positivePath);
+
+    const negativePath = document.createElementNS(ns, "path");
+    negativePath.setAttribute("d", curveLineData);
+    negativePath.setAttribute("class", "chart-line-negative");
+    negativePath.setAttribute("clip-path", `url(#${clipId}-neg)`);
+    curveGroup.append(negativePath);
   } else {
     const path = document.createElementNS(ns, "path");
-    path.setAttribute("d", lineData);
+    path.setAttribute("d", curveLineData);
     path.setAttribute("class", "chart-line");
-    svg.append(path);
+    curveGroup.append(path);
+  }
+  svg.append(curveGroup);
+  if (revealRect) {
+    if (mode === "growth") {
+      animateCurveRevealHorizontal(
+        revealRect,
+        pad - 1,
+        width - pad + 1,
+      );
+    } else {
+      animateCurveReveal(revealRect, pad - 1, height - pad + 1);
+    }
   }
 
   const last = series[series.length - 1];
   const meta = h("div", "chart-meta");
-  meta.append(
-    h("span", null, `${fmtTime(minTs / 1000)} → ${fmtTime(maxTs / 1000)}`),
-  );
   if (mode === "growth") {
     meta.append(
       h(
@@ -1057,7 +2090,7 @@ function buildChart(points, options = {}) {
         null,
         tFormat(
           "chart_last_growth",
-          "最近增量 %s tokens",
+          "最近变化量 %s tokens",
           signedNumber(last.value),
         ),
       ),
@@ -1100,8 +2133,56 @@ function buildChart(points, options = {}) {
     meta.append(legend);
   }
 
+  const axisNumber = (value) => {
+    const number = Number(value) || 0;
+    const abs = Math.abs(number);
+    if (abs >= 1000) {
+      return fmtNumber(number);
+    }
+    if (abs >= 10) {
+      return String(Math.round(number));
+    }
+    if (abs >= 1) {
+      return number.toFixed(1).replace(/\.0$/, "");
+    }
+    return number.toFixed(2).replace(/\.?0+$/, "");
+  };
+  const axisLabel = (value) =>
+    mode === "growth" && value > 0
+      ? `+${axisNumber(value)}`
+      : axisNumber(value);
+
+  const yAxis = h("div", "chart-y-axis");
+  yAxis.setAttribute("aria-hidden", "true");
+  yAxis.append(
+    h("span", null, axisLabel(maxValue)),
+    h("span", null, axisLabel(midValue)),
+    h("span", null, axisLabel(minValue)),
+  );
+
+  const xAxis = h("div", "chart-x-axis");
+  xAxis.setAttribute("aria-hidden", "true");
+  if (series.length === 1) {
+    xAxis.classList.add("is-single");
+    xAxis.append(h("span", null, fmtAxisTime(minTs, timeSpan)));
+  } else {
+    const midTs = minTs + (maxTs - minTs) / 2;
+    xAxis.append(
+      h("span", null, fmtAxisTime(minTs, timeSpan)),
+      h("span", "is-center", fmtAxisTime(midTs, timeSpan)),
+      h("span", null, fmtAxisTime(maxTs, timeSpan)),
+    );
+  }
+
   const tooltip = h("div", "chart-tooltip");
   tooltip.hidden = true;
+
+  const brush = document.createElementNS(ns, "rect");
+  brush.setAttribute("y", pad);
+  brush.setAttribute("height", height - pad * 2);
+  brush.setAttribute("class", "chart-brush");
+  brush.style.display = "none";
+  svg.append(brush);
 
   const overlay = document.createElementNS(ns, "rect");
   overlay.setAttribute("x", 0);
@@ -1121,7 +2202,58 @@ function buildChart(points, options = {}) {
     hoverLine.style.display = "none";
   };
 
+  const plotWidth = width - pad * 2;
+  const eventViewX = (event) => {
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width) {
+      return null;
+    }
+    const ratio = Math.max(
+      0,
+      Math.min(1, (event.clientX - rect.left) / rect.width),
+    );
+    return pad + ratio * plotWidth;
+  };
+  const viewXToTs = (viewX) => {
+    if (series.length < 2) {
+      return series[0].ts;
+    }
+    const ratio = Math.max(0, Math.min(1, (viewX - pad) / plotWidth));
+    return minTs + ratio * timeSpan;
+  };
+  let dragStartX = null;
+  let dragCurrentX = null;
+  let dragPointerId = null;
+  let dragging = false;
+  const clearDrag = () => {
+    dragStartX = null;
+    dragCurrentX = null;
+    dragPointerId = null;
+    dragging = false;
+    brush.style.display = "none";
+  };
+
   overlay.addEventListener("pointermove", (event) => {
+    if (dragStartX != null) {
+      const currentX = eventViewX(event);
+      if (currentX != null) {
+        dragCurrentX = currentX;
+        if (!dragging && Math.abs(currentX - dragStartX) >= 6) {
+          dragging = true;
+          tooltip.hidden = true;
+          hoverLine.style.display = "none";
+        }
+        if (dragging) {
+          const left = Math.min(dragStartX, currentX);
+          const right = Math.max(dragStartX, currentX);
+          brush.setAttribute("x", left.toFixed(1));
+          brush.setAttribute("width", (right - left).toFixed(1));
+          brush.style.display = "";
+          event.preventDefault();
+          return;
+        }
+      }
+    }
     const rect = svg.getBoundingClientRect();
     if (!rect.width) {
       return;
@@ -1156,7 +2288,7 @@ function buildChart(points, options = {}) {
           null,
           tFormat(
             "chart_tooltip_growth",
-            "增量 %s tokens",
+            "变化量 %s tokens",
             signedNumber(nearest.value),
           ),
         ),
@@ -1197,12 +2329,87 @@ function buildChart(points, options = {}) {
     hoverLine.style.display = "";
   });
   overlay.addEventListener("pointerleave", hideTooltip);
-  overlay.addEventListener("pointercancel", hideTooltip);
+
+  overlay.addEventListener("pointerdown", (event) => {
+    if (series.length < 2) {
+      return;
+    }
+    if (event.pointerType === "mouse" && event.button !== 0) {
+      return;
+    }
+    const startX = eventViewX(event);
+    if (startX == null) {
+      return;
+    }
+    dragStartX = startX;
+    dragCurrentX = startX;
+    dragPointerId = event.pointerId;
+    dragging = false;
+    tooltip.hidden = true;
+    hoverLine.style.display = "none";
+    brush.style.display = "none";
+    if (typeof overlay.setPointerCapture === "function") {
+      try {
+        overlay.setPointerCapture(event.pointerId);
+      } catch {
+        // 合成事件或部分浏览器不支持指针捕获
+      }
+    }
+  });
+
+  overlay.addEventListener("pointerup", (event) => {
+    if (dragStartX == null) {
+      return;
+    }
+    const endX = eventViewX(event) ?? dragCurrentX ?? dragStartX;
+    const startX = dragStartX;
+    const wasDragging = dragging;
+    const pointerId = dragPointerId;
+    clearDrag();
+    if (
+      pointerId != null &&
+      typeof overlay.releasePointerCapture === "function"
+    ) {
+      try {
+        overlay.releasePointerCapture(pointerId);
+      } catch {
+        // ignore
+      }
+    }
+    if (!wasDragging) {
+      return;
+    }
+    const left = Math.min(startX, endX);
+    const right = Math.max(startX, endX);
+    if (right - left < 6) {
+      return;
+    }
+    const startTs = viewXToTs(left);
+    const endTs = viewXToTs(right);
+    if (endTs - startTs < 60 * 1000) {
+      return;
+    }
+    if (typeof options.onZoom === "function") {
+      options.onZoom(startTs, endTs);
+    }
+  });
+
+  overlay.addEventListener("pointercancel", () => {
+    clearDrag();
+    hideTooltip();
+  });
+
+  const canvas = h("div", "chart-canvas");
+  canvas.append(svg);
+  canvas.append(tooltip);
+
+  const plot = h("div", "chart-plot");
+  plot.append(yAxis, canvas);
 
   const wrapper = h("div", "chart-wrap");
-  wrapper.append(svg);
+  wrapper.append(plot);
+  wrapper.append(xAxis);
   wrapper.append(meta);
-  wrapper.append(tooltip);
   return wrapper;
 }
 
@@ -1231,6 +2438,10 @@ async function loadPreferences() {
       if (DIRECTION_VALUES.includes(payload.direction)) {
         state.direction = payload.direction;
       }
+      if (CHART_RANGE_VALUES.has(payload.chart_range)) {
+        state.chartRange = payload.chart_range;
+        state.lastPresetRange = payload.chart_range;
+      }
     }
   } catch {
     // 读取失败时使用默认偏好
@@ -1249,6 +2460,7 @@ function persistPreferences() {
       await bridge.apiPost("preferences", {
         sort: state.sort,
         direction: state.direction,
+        chart_range: state.lastPresetRange,
       });
     } catch {
       // 保存失败不影响使用

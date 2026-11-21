@@ -1,8 +1,8 @@
 {
   "metadata": {
     "display_name": "上下文看板",
-    "short_desc": "在 WebUI 查看每个对话的上下文用量与压缩次数",
-    "desc": "在 AstrBot WebUI 中查看每个对话的上下文用量与压缩次数，支持对话内 context 查询、搜索、排序与深浅色主题。"
+    "short_desc": "按对话查看上下文占用、用量曲线与压缩情况",
+    "desc": "在 AstrBot WebUI 中按对话查看上下文占用、用量曲线与压缩情况，支持对话内 context 查询、搜索、排序、自定义时间范围与 CSV 导出。"
   },
   "config": {
     "chat_command": {
@@ -44,7 +44,7 @@
         "description": "显示上下文用量曲线"
       },
       "show_growth_chart": {
-        "description": "显示上下文增量曲线"
+        "description": "显示上下文变化量曲线"
       }
     },
     "compression_marker": {
@@ -70,9 +70,9 @@
   "views": {
     "dashboard": {
       "title": "上下文看板",
-      "description": "查看每个对话的上下文用量与压缩次数。",
+      "description": "按对话查看上下文占用、用量曲线与压缩情况。",
       "heading": "上下文看板",
-      "subtitle": "每个对话的上下文用量与压缩次数",
+      "subtitle": "按对话查看上下文占用、用量曲线与压缩情况",
       "search_placeholder": "搜索对话、标题、会话或 ID…",
       "bot_all": "全部",
       "bot_filter_label": "按机器人筛选",
@@ -95,11 +95,11 @@
       "loading_cached": "已显示缓存，正在后台更新…",
       "compression_threshold_hint": "约 %s% 触发上下文压缩（AstrBot 默认行为）",
       "chart_usage": "上下文用量曲线",
-      "chart_growth": "上下文增量曲线",
+      "chart_growth": "上下文变化量曲线",
       "chart_not_enough": "暂无采样数据。插件运行并刷新后，这里会显示已采集的曲线。",
       "chart_last_value": "最近 %s tokens",
       "chart_last_value_capacity": "最近 %s / %s tokens",
-      "chart_last_growth": "最近增量 %s tokens",
+      "chart_last_growth": "最近变化量 %s tokens",
       "error": "读取失败",
       "bridge_error": "初始化失败",
       "empty": "暂无对话记录",
@@ -133,7 +133,7 @@
       "chart_growth_negative": "下降",
       "chart_tooltip_usage": "已用 %s tokens",
       "chart_tooltip_usage_capacity": "已用 %s / %s tokens",
-      "chart_tooltip_growth": "增量 %s tokens",
+      "chart_tooltip_growth": "变化量 %s tokens",
       "policy_title": "上下文策略",
       "policy_max_context_length": "压缩前最多保留轮数",
       "policy_dequeue_context_length": "轮次超限丢弃轮数",
@@ -143,7 +143,69 @@
       "policy_prompt": "压缩提示词",
       "policy_provider": "压缩模型",
       "policy_empty": "配置中未找到上下文策略字段。",
-      "policy_unavailable": "未读取到 AstrBot 配置（当前版本可能不支持）。"
+      "policy_unavailable": "未读取到 AstrBot 配置（当前版本可能不支持）。",
+      "chart_range_label": "时间范围",
+      "chart_range_6h": "近 6 小时",
+      "chart_range_24h": "近 24 小时",
+      "chart_range_7d": "近 7 天",
+      "chart_range_30d": "近 30 天",
+      "chart_range_all": "全部",
+      "chart_range_custom": "自定义",
+      "chart_range_custom_hint": "选择开始与结束时间",
+      "range_custom_start": "开始",
+      "range_custom_end": "结束",
+      "range_custom_apply": "应用",
+      "range_custom_invalid": "请选择有效的开始和结束时间（开始不能晚于结束）。",
+      "export_csv": "导出 CSV",
+      "export_hint": "导出当前时间范围内的 %s 条采样",
+      "export_empty": "当前时间范围内没有可导出的数据。",
+      "export_done": "已导出 %s 条采样（CSV）。",
+      "export_failed": "导出失败，请检查浏览器下载权限。",
+      "csv_time": "时间（本地）",
+      "csv_tokens": "估算 tokens",
+      "csv_window": "上下文窗口",
+      "csv_usage": "占用率(%)",
+      "csv_delta": "变化量 tokens",
+      "chart_range_no_data": "该时间范围内没有采样",
+      "chart_range_empty": "该时间范围内没有采样数据，试试扩大范围。",
+      "chart_range_reset": "查看全部",
+      "chart_sample_count": "%s 个采样",
+      "chart_sample_count_filtered": "%s / %s 个采样",
+      "chart_curve_note": "*横向拖动可放大到所选时间段",
+      "detail_overview": "上下文概览",
+      "detail_col_metric": "指标",
+      "detail_col_value": "数值",
+      "detail_col_action": "操作",
+      "detail_section_usage": "用量与容量",
+      "detail_section_messages": "消息构成",
+      "detail_section_session": "会话信息",
+      "detail_copy": "复制",
+      "detail_copy_all": "复制全部",
+      "detail_copy_empty": "没有可复制的内容",
+      "detail_copied": "已复制",
+      "detail_copy_failed": "复制失败",
+      "detail_expand": "展开",
+      "detail_collapse": "收起",
+      "detail_more_expand": "展开更多详情",
+      "detail_more_collapse": "收起更多详情",
+      "detail_more_hint": "查看上下文概览与上下文策略",
+      "detail_hint_tokens": "按历史字符估算的上下文 token 数，用于了解大致用量，不等同于模型计费。",
+      "detail_hint_window": "当前模型配置的上下文窗口大小；未读取到时显示「窗口未知」。",
+      "detail_hint_usage": "已用 tokens ÷ 上下文窗口；达到约 %s% 时 AstrBot 会触发压缩。",
+      "detail_hint_remaining": "上下文窗口减去已用 tokens 后，还能容纳的估算 token 数。",
+      "detail_hint_compression": "从历史记录中检测到的上下文压缩次数，用于判断压缩是否频繁。",
+      "detail_hint_messages": "当前历史包含的消息总条数。",
+      "detail_hint_role_user": "用户消息的条数与字符数。",
+      "detail_hint_role_assistant": "助手消息的条数与字符数。",
+      "detail_hint_chars": "历史消息的总字符数，包含用户与助手消息。",
+      "detail_hint_session": "会话名称（会话 ID）。",
+      "detail_hint_model": "当前会话使用的模型提供商 ID。",
+      "detail_hint_history_size": "历史字符串按 UTF-8 计算的大小，反映原始存储占用。",
+      "detail_hint_created": "会话首次创建的时间。",
+      "detail_hint_updated": "会话最后一次更新的时间。",
+      "policy_col_item": "配置项",
+      "policy_col_value": "当前值",
+      "policy_col_action": "操作"
     }
   }
 }

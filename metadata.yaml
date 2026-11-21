@@ -1,8 +1,9 @@
 name: astrbot_plugin_context_dashboard
 display_name: 上下文看板
-desc: 在 AstrBot WebUI 中查看每个对话的上下文用量与压缩次数，支持按机器人筛选、搜索、排序、查看对话详情、深浅色主题，以及对话内 context 实时查询。
-short_desc: 在 WebUI 查看每个对话的上下文用量与压缩次数
-version: "1.1.0"
+desc: 在 AstrBot WebUI 中按对话查看上下文占用、用量曲线与压缩情况，支持按机器人筛选、搜索、排序、自定义时间范围、CSV 导出、查看对话详情、深浅色主题，以及对话内 context 实时查询。
+short_desc: 按对话查看上下文占用、用量曲线与压缩情况
+version: "1.1.1"
+repo: https://github.com/SlimeABC/astrbot_plugin_context_dashboard
 author: Slime
 category: 工具
 tags:

@@ -1,8 +1,8 @@
 {
   "metadata": {
     "display_name": "Context Dashboard",
-    "short_desc": "Inspect context usage and compression count per conversation in the WebUI",
-    "desc": "Inspect context usage and compression counts for every conversation in the AstrBot WebUI, with an in-chat context query, search, sorting and light/dark themes."
+    "short_desc": "Context usage, sampled curves and compression per conversation in the WebUI",
+    "desc": "Inspect context usage, sampled curves and compression for every conversation in the AstrBot WebUI, with an in-chat context query, search, sorting, custom time ranges and CSV export."
   },
   "config": {
     "chat_command": {
@@ -44,7 +44,7 @@
         "description": "Show context usage chart"
       },
       "show_growth_chart": {
-        "description": "Show context growth chart"
+        "description": "Show context change curve"
       }
     },
     "compression_marker": {
@@ -70,9 +70,9 @@
   "views": {
     "dashboard": {
       "title": "Context Dashboard",
-      "description": "Context usage and compression counts for every conversation.",
+      "description": "Context usage, sampled curves and compression for every conversation.",
       "heading": "Context Dashboard",
-      "subtitle": "Context usage and compression counts per conversation",
+      "subtitle": "Context usage, sampled curves and compression per conversation",
       "search_placeholder": "Search conversations, titles, sessions or IDs…",
       "bot_all": "All bots",
       "bot_filter_label": "Filter by bot",
@@ -95,7 +95,7 @@
       "loading_cached": "Showing cached data, updating in background…",
       "compression_threshold_hint": "Context compression triggers at about %s% (AstrBot default)",
       "chart_usage": "Context usage",
-      "chart_growth": "Context growth",
+      "chart_growth": "Context change curve",
       "chart_not_enough": "No samples yet. Curves will appear after the plugin has collected some data.",
       "chart_last_value": "Latest %s tokens",
       "chart_last_value_capacity": "Latest %s / %s tokens",
@@ -143,7 +143,69 @@
       "policy_prompt": "Compression prompt",
       "policy_provider": "Compression provider",
       "policy_empty": "No context policy fields found in the config.",
-      "policy_unavailable": "Could not read the AstrBot config (this version may not support it)."
+      "policy_unavailable": "Could not read the AstrBot config (this version may not support it).",
+      "chart_range_label": "Time range",
+      "chart_range_6h": "Last 6 hours",
+      "chart_range_24h": "Last 24 hours",
+      "chart_range_7d": "Last 7 days",
+      "chart_range_30d": "Last 30 days",
+      "chart_range_all": "All",
+      "chart_range_custom": "Custom",
+      "chart_range_custom_hint": "Choose start and end times",
+      "range_custom_start": "Start",
+      "range_custom_end": "End",
+      "range_custom_apply": "Apply",
+      "range_custom_invalid": "Choose a valid start and end time (start cannot be after end).",
+      "export_csv": "Export CSV",
+      "export_hint": "Export %s samples in the selected time range",
+      "export_empty": "No samples to export in this time range.",
+      "export_done": "Exported %s samples (CSV).",
+      "export_failed": "Export failed. Check browser download permissions.",
+      "csv_time": "Time (local)",
+      "csv_tokens": "Est. tokens",
+      "csv_window": "Context window",
+      "csv_usage": "Usage (%)",
+      "csv_delta": "Change tokens",
+      "chart_range_no_data": "No samples in this range",
+      "chart_range_empty": "No samples in this time range. Try a wider range.",
+      "chart_range_reset": "Show all",
+      "chart_sample_count": "%s samples",
+      "chart_sample_count_filtered": "%s / %s samples",
+      "chart_curve_note": "* Drag horizontally to zoom into a time range",
+      "detail_overview": "Context overview",
+      "detail_col_metric": "Metric",
+      "detail_col_value": "Value",
+      "detail_col_action": "Actions",
+      "detail_section_usage": "Usage & capacity",
+      "detail_section_messages": "Messages",
+      "detail_section_session": "Session info",
+      "detail_copy": "Copy",
+      "detail_copy_all": "Copy all",
+      "detail_copy_empty": "Nothing to copy",
+      "detail_copied": "Copied",
+      "detail_copy_failed": "Copy failed",
+      "detail_expand": "Expand",
+      "detail_collapse": "Collapse",
+      "detail_more_expand": "Show more details",
+      "detail_more_collapse": "Hide more details",
+      "detail_more_hint": "View context overview and policy",
+      "detail_hint_tokens": "Estimated context tokens from history characters; useful for scale, not billing.",
+      "detail_hint_window": "Context window of the current model; shows “Window unknown” when unavailable.",
+      "detail_hint_usage": "Used tokens ÷ context window; AstrBot compresses at about %s%.",
+      "detail_hint_remaining": "Estimated tokens that still fit in the context window.",
+      "detail_hint_compression": "Compression events detected in the history, showing how often compression happens.",
+      "detail_hint_messages": "Total number of messages in the current history.",
+      "detail_hint_role_user": "Message and character counts for user messages.",
+      "detail_hint_role_assistant": "Message and character counts for assistant messages.",
+      "detail_hint_chars": "Total characters across user and assistant messages.",
+      "detail_hint_session": "Session name (session ID).",
+      "detail_hint_model": "Provider ID used by this conversation.",
+      "detail_hint_history_size": "UTF-8 size of the history string, reflecting raw storage.",
+      "detail_hint_created": "When the conversation was first created.",
+      "detail_hint_updated": "When the conversation was last updated.",
+      "policy_col_item": "Setting",
+      "policy_col_value": "Current value",
+      "policy_col_action": "Actions"
     }
   }
 }

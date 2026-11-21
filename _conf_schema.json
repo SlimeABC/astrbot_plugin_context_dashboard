@@ -71,7 +71,7 @@
         "default": true
       },
       "show_growth_chart": {
-        "description": "显示上下文增量曲线",
+        "description": "显示上下文变化量曲线",
         "type": "bool",
         "default": true
       }
