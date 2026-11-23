@@ -2,7 +2,7 @@
   "metadata": {
     "display_name": "上下文看板",
     "short_desc": "按对话查看上下文占用、用量曲线与压缩情况",
-    "desc": "在 AstrBot WebUI 中按对话查看上下文占用、用量曲线与压缩情况，支持对话内 context 查询、搜索、排序、自定义时间范围与 CSV 导出。"
+    "desc": "在 AstrBot WebUI 中按对话查看上下文占用、用量曲线与压缩情况，支持对话内 context 查询、搜索、排序、对话置顶、自定义时间范围与 CSV 导出。"
   },
   "config": {
     "chat_command": {
@@ -85,6 +85,8 @@
       "sort_tokens": "上下文用量",
       "sort_messages": "消息数",
       "sort_compression": "压缩次数",
+      "pin_action": "置顶",
+      "unpin_action": "取消置顶",
       "refresh": "刷新",
       "stat_sessions": "会话",
       "stat_conversations": "对话",

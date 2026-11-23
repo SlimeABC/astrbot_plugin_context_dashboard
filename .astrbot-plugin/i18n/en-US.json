@@ -2,7 +2,7 @@
   "metadata": {
     "display_name": "Context Dashboard",
     "short_desc": "Context usage, sampled curves and compression per conversation in the WebUI",
-    "desc": "Inspect context usage, sampled curves and compression for every conversation in the AstrBot WebUI, with an in-chat context query, search, sorting, custom time ranges and CSV export."
+    "desc": "Inspect context usage, sampled curves and compression for every conversation in the AstrBot WebUI, with an in-chat context query, search, sorting, pinning, custom time ranges and CSV export."
   },
   "config": {
     "chat_command": {
@@ -85,6 +85,8 @@
       "sort_tokens": "Context usage",
       "sort_messages": "Messages",
       "sort_compression": "Compressions",
+      "pin_action": "Pin",
+      "unpin_action": "Unpin",
       "refresh": "Refresh",
       "stat_sessions": "Sessions",
       "stat_conversations": "Conversations",

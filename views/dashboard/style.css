@@ -354,6 +354,63 @@ body {
   white-space: nowrap;
 }
 
+.pin-button {
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: center;
+  width: 24px;
+  height: 24px;
+  padding: 0;
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--muted);
+  background: transparent;
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  cursor: pointer;
+  transition:
+    color 0.2s ease,
+    background-color 0.2s ease,
+    border-color 0.2s ease,
+    transform 0.15s ease;
+}
+
+.pin-icon {
+  display: block;
+  width: 14px;
+  height: 14px;
+}
+
+.pin-icon path {
+  fill: currentColor;
+}
+
+.pin-button:hover {
+  color: var(--accent);
+  border-color: var(--accent);
+}
+
+.pin-button:active {
+  transform: scale(0.94);
+}
+
+.pin-button[aria-pressed="true"] {
+  color: var(--accent);
+  background: var(--accent-soft);
+  border-color: transparent;
+}
+
+.pin-button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
+
+.session.is-pinned {
+  border-color: var(--accent);
+}
+
 .session-meta {
   margin-top: 2px;
   overflow: hidden;

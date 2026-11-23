@@ -27,7 +27,7 @@ except ImportError:  # pragma: no cover
     AstrBotConfig = dict
 
 PLUGIN_NAME = "astrbot_plugin_context_dashboard"
-PLUGIN_VERSION = "1.1.1"
+PLUGIN_VERSION = "1.1.2"
 
 MAX_CONVERSATIONS = 500  # 单次扫描的最大对话数
 MAX_WINDOW_LOOKUPS = 200  # 最多为多少个对话探测模型上下文窗口
@@ -48,8 +48,10 @@ _CONTEXT_QUERY_RE = re.compile(r"^\s*/?\s*context\s*$", re.IGNORECASE)
 PREFERENCE_DEFAULTS = {
     "sort": "tokens",
     "direction": "desc",
+    # 旧偏好兼容字段；WebUI 不再读写时间范围，每次打开默认 24h
     "chart_range": "24h",
 }
+MAX_PINNED = 200
 _SORT_VALUES = {"updated", "tokens", "messages", "compression"}
 _DIRECTION_VALUES = {"asc", "desc"}
 _CHART_RANGE_VALUES = {"6h", "24h", "7d", "30d", "all"}
@@ -401,6 +403,22 @@ def sanitize_preferences(value: Any) -> dict:
             prefs["direction"] = direction
         if chart_range in _CHART_RANGE_VALUES:
             prefs["chart_range"] = chart_range
+
+        pinned = value.get("pinned")
+        if isinstance(pinned, list):
+            cleaned = []
+            seen = set()
+            for entry in pinned:
+                if not isinstance(entry, str):
+                    continue
+                key = entry.strip()[:256]
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                cleaned.append(key)
+                if len(cleaned) >= MAX_PINNED:
+                    break
+            prefs["pinned"] = cleaned
     return prefs
 
 

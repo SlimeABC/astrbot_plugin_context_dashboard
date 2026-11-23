@@ -28,10 +28,10 @@ const state = {
   bot: "all", // "all" 或 platform_id
   sort: "tokens", // updated | tokens | messages | compression
   direction: "desc", // asc | desc
-  chartRange: "24h", // 6h | 24h | 7d | 30d | all | custom
-  lastPresetRange: "24h", // 最近一次预设，自定义区间时用于持久化
+  chartRange: "24h", // 6h | 24h | 7d | 30d | all | custom（每次打开默认 24h，不持久化）
   customRange: null, // { start, end } 自定义绝对区间（毫秒）
   customPanelOpen: false,
+  pinned: new Set(), // item.key -> 是否置顶
   moreExpanded: new Set(), // item.key -> 已展开更多详情
   loading: false,
   fetching: false,
@@ -78,7 +78,6 @@ const CHART_RANGES = [
   { value: "30d", seconds: 30 * 24 * 3600, label: ["chart_range_30d", "近 30 天"] },
   { value: "all", seconds: 0, label: ["chart_range_all", "全部"] },
 ];
-const CHART_RANGE_VALUES = new Set(CHART_RANGES.map((range) => range.value));
 let chartClipSeq = 0; // 变化量曲线正负裁剪的唯一 ID
 
 function chartRangeConfig(value) {
@@ -655,7 +654,77 @@ function visibleItems() {
 
   const sorter = SORTERS[state.sort] || SORTERS.tokens;
   const sorted = matched.sort(sorter);
-  return state.direction === "desc" ? sorted.reverse() : sorted;
+  const ordered = state.direction === "desc" ? sorted.reverse() : sorted;
+  if (!state.pinned.size) {
+    return ordered;
+  }
+  const pinned = [];
+  const rest = [];
+  for (const item of ordered) {
+    if (state.pinned.has(item.key)) {
+      pinned.push(item);
+    } else {
+      rest.push(item);
+    }
+  }
+  return pinned.concat(rest);
+}
+
+function togglePin(item) {
+  if (state.pinned.has(item.key)) {
+    state.pinned.delete(item.key);
+  } else {
+    state.pinned.add(item.key);
+  }
+  persistPreferences();
+  renderItems();
+  const button = Array.from(els.list.querySelectorAll(".pin-button")).find(
+    (node) => node.dataset.pinKey === item.key,
+  );
+  if (button) {
+    button.focus();
+  }
+}
+
+function pinIcon() {
+  const ns = "http://www.w3.org/2000/svg";
+  const svg = document.createElementNS(ns, "svg");
+  svg.setAttribute("viewBox", "0 0 24 24");
+  svg.setAttribute("aria-hidden", "true");
+  svg.setAttribute("focusable", "false");
+  svg.setAttribute("class", "pin-icon");
+  const path = document.createElementNS(ns, "path");
+  path.setAttribute(
+    "d",
+    "M16 9V4h1c.55 0 1-.45 1-1s-.45-1-1-1H7c-.55 0-1 .45-1 1s.45 1 1 1h1v5c0 1.66-1.34 3-3 3v2h5.97v7l1 1 1-1v-7H19v-2c-1.66 0-3-1.34-3-3z",
+  );
+  path.setAttribute("fill", "currentColor");
+  svg.append(path);
+  return svg;
+}
+
+function pinButton(item) {
+  const pinned = state.pinned.has(item.key);
+  const label = pinned
+    ? t("unpin_action", "取消置顶")
+    : t("pin_action", "置顶");
+  const button = h("button", "pin-button");
+  button.append(pinIcon());
+  button.type = "button";
+  button.dataset.pinKey = item.key;
+  button.setAttribute("aria-pressed", pinned ? "true" : "false");
+  button.setAttribute("aria-label", label);
+  button.title = label;
+  button.addEventListener("click", (event) => {
+    event.stopPropagation();
+    togglePin(item);
+  });
+  button.addEventListener("keydown", (event) => {
+    if (event.key === "Enter" || event.key === " ") {
+      event.stopPropagation();
+    }
+  });
+  return button;
 }
 
 function renderItems() {
@@ -697,6 +766,7 @@ function renderItems() {
 function renderItem(item) {
   const article = h("article", "session");
   const expanded = state.expanded.has(item.key);
+  article.classList.toggle("is-pinned", state.pinned.has(item.key));
 
   const head = h("div", "session-head");
   head.tabIndex = 0;
@@ -733,6 +803,7 @@ function renderItem(item) {
   } else {
     titleRow.append(h("span", "badge", t("no_compression", "无压缩记录")));
   }
+  titleRow.append(pinButton(item));
   main.append(titleRow);
 
   const metaBits = [
@@ -1624,9 +1695,7 @@ function renderCharts(container, conversation, samples, ui, options = {}) {
         return;
       }
       state.chartRange = option.value;
-      state.lastPresetRange = option.value;
       state.customPanelOpen = false;
-      persistPreferences();
       rerender();
       focusRangeButton(container, option.value);
     });
@@ -1718,9 +1787,7 @@ function renderCharts(container, conversation, samples, ui, options = {}) {
     reset.type = "button";
     reset.addEventListener("click", () => {
       state.chartRange = "all";
-      state.lastPresetRange = "all";
       state.customPanelOpen = false;
-      persistPreferences();
       rerender();
       focusRangeButton(container, "all");
     });
@@ -1824,7 +1891,8 @@ function buildMonotonePath(series, x, y) {
   return path;
 }
 
-function buildCustomPanel(allPoints, rerender) {  const rangeWindow = state.customRange || defaultCustomWindow(allPoints);
+function buildCustomPanel(allPoints, rerender) {
+  const rangeWindow = state.customRange || defaultCustomWindow(allPoints);
   const panel = h("div", "range-custom");
   panel.hidden = !state.customPanelOpen;
 
@@ -2438,9 +2506,12 @@ async function loadPreferences() {
       if (DIRECTION_VALUES.includes(payload.direction)) {
         state.direction = payload.direction;
       }
-      if (CHART_RANGE_VALUES.has(payload.chart_range)) {
-        state.chartRange = payload.chart_range;
-        state.lastPresetRange = payload.chart_range;
+      if (Array.isArray(payload.pinned)) {
+        state.pinned = new Set(
+          payload.pinned
+            .filter((key) => typeof key === "string" && key.trim())
+            .slice(0, 200),
+        );
       }
     }
   } catch {
@@ -2460,7 +2531,7 @@ function persistPreferences() {
       await bridge.apiPost("preferences", {
         sort: state.sort,
         direction: state.direction,
-        chart_range: state.lastPresetRange,
+        pinned: Array.from(state.pinned),
       });
     } catch {
       // 保存失败不影响使用
